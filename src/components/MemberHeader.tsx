@@ -1,6 +1,15 @@
-import Link from 'next/link';
+'use client';
 
-export function MemberHeader({ activeTab }: { activeTab: string }) {
+import Link from 'next/link';
+import { logoutAction } from '@/app/actions/authActions';
+
+export function MemberHeader({
+  activeTab,
+  userEmail,
+}: {
+  activeTab: string;
+  userEmail?: string;
+}) {
   const tabs = [
     { name: 'Overview', href: '/dashboard' },
     { name: 'My Scores', href: '/dashboard/scores' },
@@ -14,10 +23,29 @@ export function MemberHeader({ activeTab }: { activeTab: string }) {
   return (
     <div className="border-b border-[#e2ded4] bg-white mb-8">
       <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-6">
-        <h1 className="text-3xl font-serif font-bold text-[#0f4c46]">Member Dashboard</h1>
-        <p className="text-sm text-[#1a1d20]/70 mt-1">
-          Manage your scores, subscription entitlement, charity contributions, and prize winnings.
-        </p>
+        <div className="flex items-center justify-between">
+          <div>
+            <h1 className="text-3xl font-serif font-bold text-[#0f4c46]">Member Dashboard</h1>
+            <p className="text-sm text-[#1a1d20]/70 mt-1">
+              Manage your scores, subscription entitlement, charity contributions, and prize winnings.
+            </p>
+          </div>
+          <div className="flex items-center gap-4">
+            {userEmail && (
+              <span className="text-xs font-medium text-[#1a1d20]/70 bg-[#f4f1ea] px-3 py-1.5 rounded-full border border-[#e2ded4]">
+                {userEmail}
+              </span>
+            )}
+            <form action={logoutAction}>
+              <button
+                type="submit"
+                className="text-xs font-semibold px-3 py-1.5 rounded-xl border border-rose-200 text-rose-700 bg-rose-50 hover:bg-rose-100 transition-colors"
+              >
+                Sign Out
+              </button>
+            </form>
+          </div>
+        </div>
 
         <nav className="flex space-x-8 mt-6 overflow-x-auto pb-2 scrollbar-none">
           {tabs.map((tab) => {

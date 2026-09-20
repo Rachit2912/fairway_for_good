@@ -37,4 +37,18 @@ describe('Draw Engine Domain Logic', () => {
     expect(res.threeMatchPayoutPerWinnerMinor).toBe(Math.floor(25000 / 7));
     expect(res.fiveMatchRolloverMinor).toBe(52000);
   });
+
+  it('enforces prize pool conservation regression test with zero winners', () => {
+    const input: DrawFinancialAllocationInput = {
+      totalFundedMinor: 50000,
+      incomingRolloverMinor: 0,
+      winnerCounts: { fiveMatch: 0, fourMatch: 0, threeMatch: 0 },
+    };
+
+    const res = calculateDrawFinancials(input);
+    expect(res.basePrizePoolMinor).toBe(10000);
+    expect(res.fiveMatchRolloverMinor).toBe(4000);
+    expect(res.unawardedReserveMinor).toBe(6000);
+    expect(res.roundingReserveMinor).toBe(0);
+  });
 });

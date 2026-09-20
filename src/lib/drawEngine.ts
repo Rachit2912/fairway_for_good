@@ -58,7 +58,7 @@ export function calculateDrawFinancials(input: DrawFinancialAllocationInput) {
     t4PayoutPerWinner = Math.floor(t4Pool / input.winnerCounts.fourMatch);
     t4Reserve = t4Pool - t4PayoutPerWinner * input.winnerCounts.fourMatch;
   } else {
-    t4Reserve = t4Pool;
+    t4Reserve = 0; // Unawarded pool goes to unawardedReserveMinor, not rounding reserve
   }
 
   let t3PayoutPerWinner = 0;
@@ -68,7 +68,7 @@ export function calculateDrawFinancials(input: DrawFinancialAllocationInput) {
     t3PayoutPerWinner = Math.floor(t3Pool / input.winnerCounts.threeMatch);
     t3Reserve = t3Pool - t3PayoutPerWinner * input.winnerCounts.threeMatch;
   } else {
-    t3Reserve = t3Pool;
+    t3Reserve = 0; // Unawarded pool goes to unawardedReserveMinor, not rounding reserve
   }
 
   return {

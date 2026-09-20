@@ -30,20 +30,26 @@ export async function POST(req: NextRequest) {
         const customerId = session.customer;
 
         if (userId && subscriptionId) {
-          const subDetails = await stripe.subscriptions.retrieve(subscriptionId) as any;
-          const planType = subDetails.items.data[0]?.price?.id === process.env.NEXT_PUBLIC_STRIPE_ANNUAL_PRICE_ID ? 'annual' : 'monthly';
+          const subDetails = (await stripe.subscriptions.retrieve(subscriptionId)) as any;
+          const planType =
+            subDetails.items.data[0]?.price?.id === process.env.NEXT_PUBLIC_STRIPE_ANNUAL_PRICE_ID
+              ? 'annual'
+              : 'monthly';
 
-          await supabase.from('subscriptions').upsert({
-            user_id: userId,
-            stripe_customer_id: customerId,
-            stripe_subscription_id: subscriptionId,
-            plan_type: planType,
-            status: subDetails.status,
-            current_period_start: new Date(subDetails.current_period_start * 1000).toISOString(),
-            current_period_end: new Date(subDetails.current_period_end * 1000).toISOString(),
-            cancel_at_period_end: subDetails.cancel_at_period_end,
-            last_reconciled_at: new Date().toISOString(),
-          });
+          await supabase.from('subscriptions').upsert(
+            {
+              user_id: userId,
+              stripe_customer_id: customerId,
+              stripe_subscription_id: subscriptionId,
+              plan_type: planType,
+              status: subDetails.status,
+              current_period_start: new Date(subDetails.current_period_start * 1000).toISOString(),
+              current_period_end: new Date(subDetails.current_period_end * 1000).toISOString(),
+              cancel_at_period_end: subDetails.cancel_at_period_end,
+              last_reconciled_at: new Date().toISOString(),
+            },
+            { onConflict: 'user_id' }
+          );
         }
         break;
       }
@@ -60,52 +66,89 @@ export async function POST(req: NextRequest) {
             .maybeSingle();
 
           if (subData) {
+            // Idempotent invoice check
             const { data: existingInvoice } = await supabase
               .from('invoices')
               .select('id')
               .eq('stripe_invoice_id', invoice.id)
               .maybeSingle();
 
+            let invoiceDbId = existingInvoice?.id;
+
             if (!existingInvoice) {
-              const { data: insertedInvoice } = await supabase.from('invoices').insert({
-                user_id: subData.user_id,
-                stripe_invoice_id: invoice.id,
-                amount_paid: invoice.amount_paid,
-                currency: invoice.currency,
-                plan_type: subData.plan_type || 'monthly',
-                paid_at: new Date(invoice.status_transitions?.paid_at * 1000 || Date.now()).toISOString(),
-              }).select().single();
+              const { data: insertedInvoice, error: invErr } = await supabase
+                .from('invoices')
+                .insert({
+                  user_id: subData.user_id,
+                  stripe_invoice_id: invoice.id,
+                  amount_paid: invoice.amount_paid,
+                  currency: invoice.currency,
+                  plan_type: subData.plan_type || 'monthly',
+                  paid_at: new Date((invoice.status_transitions?.paid_at || Date.now() / 1000) * 1000).toISOString(),
+                })
+                .select()
+                .single();
 
-              if (insertedInvoice) {
-                const now = new Date();
-                const currentYear = now.getUTCFullYear();
-                const currentMonth = now.getUTCMonth() + 1;
+              if (invErr) {
+                console.error('Invoice insert error:', invErr);
+                throw invErr;
+              }
+              invoiceDbId = insertedInvoice.id;
+            }
 
-                const { data: profile } = await supabase
-                  .from('profiles')
-                  .select('selected_charity_id, charity_percentage')
-                  .eq('id', subData.user_id)
-                  .single();
+            if (invoiceDbId) {
+              // Base coverage dates on paid billing period timestamps from invoice
+              const periodStart = new Date((invoice.period_start || Date.now() / 1000) * 1000);
+              const startYear = periodStart.getUTCFullYear();
+              const startMonth = periodStart.getUTCMonth() + 1;
 
-                const charityPct = profile?.charity_percentage || 10;
-                const totalAmount = invoice.amount_paid;
+              const { data: profile } = await supabase
+                .from('profiles')
+                .select('selected_charity_id, charity_percentage')
+                .eq('id', subData.user_id)
+                .single();
 
-                if (subData.plan_type === 'annual') {
-                  const monthlyBaseShare = Math.floor(totalAmount / 12);
-                  const remainder = totalAmount - (monthlyBaseShare * 12);
+              const charityPct = profile?.charity_percentage || 10;
+              const totalAmount = invoice.amount_paid;
 
-                  for (let i = 0; i < 12; i++) {
-                    const covDate = new Date(Date.UTC(currentYear, currentMonth - 1 + i, 1));
-                    const covYear = covDate.getUTCFullYear();
-                    const covMonth = covDate.getUTCMonth() + 1;
+              if (subData.plan_type === 'annual') {
+                const monthlyBaseShare = Math.floor(totalAmount / 12);
+                const remainder = totalAmount - monthlyBaseShare * 12;
 
-                    const monthTotal = i === 0 ? monthlyBaseShare + remainder : monthlyBaseShare;
-                    const prizeShare = Math.floor(monthTotal * 0.20);
-                    const charityShare = Math.floor(monthTotal * (charityPct / 100));
-                    const platformShare = monthTotal - prizeShare - charityShare;
+                for (let i = 0; i < 12; i++) {
+                  const covDate = new Date(Date.UTC(startYear, startMonth - 1 + i, 1));
+                  const covYear = covDate.getUTCFullYear();
+                  const covMonth = covDate.getUTCMonth() + 1;
 
-                    await supabase.from('funding_allocations').upsert({
-                      invoice_id: insertedInvoice.id,
+                  // Protect funds already linked to published draws
+                  const { data: existingAlloc } = await supabase
+                    .from('funding_allocations')
+                    .select('draw_id')
+                    .eq('user_id', subData.user_id)
+                    .eq('coverage_year', covYear)
+                    .eq('coverage_month', covMonth)
+                    .maybeSingle();
+
+                  if (existingAlloc?.draw_id) {
+                    const { data: linkedDraw } = await supabase
+                      .from('draws')
+                      .select('status')
+                      .eq('id', existingAlloc.draw_id)
+                      .maybeSingle();
+
+                    if (linkedDraw?.status === 'published') {
+                      continue; // Do not overwrite allocation consumed by published draw
+                    }
+                  }
+
+                  const monthTotal = i === 0 ? monthlyBaseShare + remainder : monthlyBaseShare;
+                  const prizeShare = Math.floor(monthTotal * 0.20);
+                  const charityShare = Math.floor(monthTotal * (charityPct / 100));
+                  const platformShare = monthTotal - prizeShare - charityShare;
+
+                  await supabase.from('funding_allocations').upsert(
+                    {
+                      invoice_id: invoiceDbId,
                       user_id: subData.user_id,
                       coverage_year: covYear,
                       coverage_month: covMonth,
@@ -115,25 +158,53 @@ export async function POST(req: NextRequest) {
                       platform_share_minor: platformShare,
                       charity_id: profile?.selected_charity_id,
                       charity_percentage_snapshot: charityPct,
-                    }, { onConflict: 'user_id,coverage_year,coverage_month' });
+                    },
+                    { onConflict: 'user_id,coverage_year,coverage_month' }
+                  );
+                }
+              } else {
+                // Protect funds linked to published draw
+                const { data: existingAlloc } = await supabase
+                  .from('funding_allocations')
+                  .select('draw_id')
+                  .eq('user_id', subData.user_id)
+                  .eq('coverage_year', startYear)
+                  .eq('coverage_month', startMonth)
+                  .maybeSingle();
+
+                let skipAllocation = false;
+                if (existingAlloc?.draw_id) {
+                  const { data: linkedDraw } = await supabase
+                    .from('draws')
+                    .select('status')
+                    .eq('id', existingAlloc.draw_id)
+                    .maybeSingle();
+
+                  if (linkedDraw?.status === 'published') {
+                    skipAllocation = true;
                   }
-                } else {
+                }
+
+                if (!skipAllocation) {
                   const prizeShare = Math.floor(totalAmount * 0.20);
                   const charityShare = Math.floor(totalAmount * (charityPct / 100));
                   const platformShare = totalAmount - prizeShare - charityShare;
 
-                  await supabase.from('funding_allocations').upsert({
-                    invoice_id: insertedInvoice.id,
-                    user_id: subData.user_id,
-                    coverage_year: currentYear,
-                    coverage_month: currentMonth,
-                    total_allocated_minor: totalAmount,
-                    prize_share_minor: prizeShare,
-                    charity_share_minor: charityShare,
-                    platform_share_minor: platformShare,
-                    charity_id: profile?.selected_charity_id,
-                    charity_percentage_snapshot: charityPct,
-                  }, { onConflict: 'user_id,coverage_year,coverage_month' });
+                  await supabase.from('funding_allocations').upsert(
+                    {
+                      invoice_id: invoiceDbId,
+                      user_id: subData.user_id,
+                      coverage_year: startYear,
+                      coverage_month: startMonth,
+                      total_allocated_minor: totalAmount,
+                      prize_share_minor: prizeShare,
+                      charity_share_minor: charityShare,
+                      platform_share_minor: platformShare,
+                      charity_id: profile?.selected_charity_id,
+                      charity_percentage_snapshot: charityPct,
+                    },
+                    { onConflict: 'user_id,coverage_year,coverage_month' }
+                  );
                 }
               }
             }

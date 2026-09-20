@@ -8,7 +8,7 @@ export function validateAndFormatScore(value: number, roundDate: string) {
     throw new Error('Round date cannot be in the future');
   }
 
-  return { value, roundDate };
+  return { value, round_date: roundDate };
 }
 
 export function retainFiveGreatestScores(

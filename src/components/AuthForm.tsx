@@ -1,7 +1,24 @@
+'use client';
+
 import Link from 'next/link';
+import { useState } from 'react';
+import { loginAction, signupAction } from '@/app/actions/authActions';
 
 export function AuthForm({ mode }: { mode: 'login' | 'signup' }) {
   const isSignup = mode === 'signup';
+  const [error, setError] = useState<string | null>(null);
+  const [loading, setLoading] = useState(false);
+
+  async function handleSubmit(formData: FormData) {
+    setLoading(true);
+    setError(null);
+
+    const res = isSignup ? await signupAction(formData) : await loginAction(formData);
+    if (res?.error) {
+      setError(res.error);
+      setLoading(false);
+    }
+  }
 
   return (
     <div className="max-w-md mx-auto px-4 py-16">
@@ -17,7 +34,13 @@ export function AuthForm({ mode }: { mode: 'login' | 'signup' }) {
           </p>
         </div>
 
-        <form className="space-y-4" action="/api/auth/login" method="POST">
+        {error && (
+          <div className="p-3 rounded-xl bg-rose-50 border border-rose-200 text-rose-700 text-xs font-semibold">
+            {error}
+          </div>
+        )}
+
+        <form action={handleSubmit} className="space-y-4">
           {isSignup && (
             <div>
               <label className="block text-xs font-semibold uppercase text-[#1a1d20]/70 mb-1">
@@ -78,9 +101,10 @@ export function AuthForm({ mode }: { mode: 'login' | 'signup' }) {
 
           <button
             type="submit"
-            className="w-full py-3 rounded-xl bg-[#0f4c46] text-[#fdfbf7] font-semibold hover:bg-[#0a3834] transition-colors shadow-sm mt-2"
+            disabled={loading}
+            className="w-full py-3 rounded-xl bg-[#0f4c46] text-[#fdfbf7] font-semibold hover:bg-[#0a3834] transition-colors shadow-sm mt-2 disabled:opacity-50"
           >
-            {isSignup ? 'Create Account' : 'Sign In'}
+            {loading ? 'Processing...' : isSignup ? 'Create Account' : 'Sign In'}
           </button>
         </form>
 

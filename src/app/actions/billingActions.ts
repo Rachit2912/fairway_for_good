@@ -4,7 +4,20 @@ import { createClient } from '@/lib/supabase/server';
 import { stripe } from '@/lib/stripe/client';
 import { redirect } from 'next/navigation';
 
-export async function createCheckoutSessionAction(priceId: string, planType: 'monthly' | 'annual') {
+export async function createCheckoutSessionAction(planType: 'monthly' | 'annual') {
+  if (planType !== 'monthly' && planType !== 'annual') {
+    return { error: 'Invalid plan selection' };
+  }
+
+  const priceId =
+    planType === 'annual'
+      ? process.env.NEXT_PUBLIC_STRIPE_ANNUAL_PRICE_ID
+      : process.env.NEXT_PUBLIC_STRIPE_MONTHLY_PRICE_ID;
+
+  if (!priceId) {
+    return { error: 'Missing Stripe Price ID configuration' };
+  }
+
   const supabase = await createClient();
   const {
     data: { user },
@@ -14,20 +27,24 @@ export async function createCheckoutSessionAction(priceId: string, planType: 'mo
     redirect('/login');
   }
 
+  // Prevent duplicate active subscriptions
+  const { data: existingSub } = await supabase
+    .from('subscriptions')
+    .select('status, stripe_customer_id')
+    .eq('user_id', user.id)
+    .maybeSingle();
+
+  if (existingSub?.status === 'active' || existingSub?.status === 'trialing') {
+    return { error: 'User already has an active subscription. Manage billing in the portal.' };
+  }
+
   const { data: profile } = await supabase
     .from('profiles')
     .select('email, full_name')
     .eq('id', user.id)
     .single();
 
-  // Check if customer ID already exists in subscriptions
-  const { data: sub } = await supabase
-    .from('subscriptions')
-    .select('stripe_customer_id')
-    .eq('user_id', user.id)
-    .maybeSingle();
-
-  let customerId = sub?.stripe_customer_id;
+  let customerId = existingSub?.stripe_customer_id;
 
   if (!customerId) {
     const customer = await stripe.customers.create({
@@ -64,6 +81,8 @@ export async function createCheckoutSessionAction(priceId: string, planType: 'mo
   if (session.url) {
     redirect(session.url);
   }
+
+  return { error: 'Failed to create checkout session' };
 }
 
 export async function createPortalSessionAction() {
@@ -96,4 +115,6 @@ export async function createPortalSessionAction() {
   if (portalSession.url) {
     redirect(portalSession.url);
   }
+
+  return { error: 'Failed to create billing portal session' };
 }

@@ -10,7 +10,6 @@ export function checkRlsPermission(
   if (tableName === 'scores') {
     if (action === 'SELECT') return actorRole === 'admin' || (actorRole === 'member' && isOwner);
     if (action === 'DELETE') return actorRole === 'admin' || (actorRole === 'member' && isOwner);
-    // INSERT / UPDATE restricted from direct calls; forced through save_user_score RPC
     if (action === 'INSERT' || action === 'UPDATE') return false;
   }
 
@@ -26,6 +25,11 @@ export function checkRlsPermission(
   if (tableName === 'draws') {
     if (action === 'SELECT') return recordStatus === 'published' || actorRole === 'admin';
     if (action === 'INSERT' || action === 'UPDATE' || action === 'DELETE') return actorRole === 'admin';
+  }
+
+  if (tableName === 'user_roles') {
+    if (action === 'INSERT' || action === 'UPDATE') return actorRole === 'admin';
+    if (action === 'SELECT') return actorRole === 'admin' || (actorRole === 'member' && isOwner);
   }
 
   return false;
@@ -50,5 +54,11 @@ describe('Database Authorization and RLS Rules', () => {
     expect(checkRlsPermission('draws', 'SELECT', 'member', false, 'draft')).toBe(false);
     expect(checkRlsPermission('draws', 'SELECT', 'anon', false, 'published')).toBe(true);
     expect(checkRlsPermission('draws', 'SELECT', 'admin', false, 'draft')).toBe(true);
+  });
+
+  it('prevents standard members from granting themselves admin roles', () => {
+    expect(checkRlsPermission('user_roles', 'INSERT', 'member', true)).toBe(false);
+    expect(checkRlsPermission('user_roles', 'UPDATE', 'member', true)).toBe(false);
+    expect(checkRlsPermission('user_roles', 'UPDATE', 'admin', true)).toBe(true);
   });
 });

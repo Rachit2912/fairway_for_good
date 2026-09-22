@@ -27,7 +27,6 @@ export async function createCheckoutSessionAction(planType: 'monthly' | 'annual'
     redirect('/login');
   }
 
-  // Prevent duplicate active subscriptions
   const { data: existingSub } = await supabase
     .from('subscriptions')
     .select('status, stripe_customer_id')
@@ -117,4 +116,58 @@ export async function createPortalSessionAction() {
   }
 
   return { error: 'Failed to create billing portal session' };
+}
+
+export async function createDonationCheckoutSessionAction(charityId: string, amountMinor: number) {
+  if (!amountMinor || amountMinor <= 0) {
+    return { error: 'Donation amount must be greater than zero' };
+  }
+
+  const supabase = await createClient();
+  const {
+    data: { user },
+  } = await supabase.auth.getUser();
+
+  const { data: charity } = await supabase
+    .from('charities')
+    .select('name')
+    .eq('id', charityId)
+    .single();
+
+  if (!charity) {
+    return { error: 'Charity not found' };
+  }
+
+  const origin = process.env.NEXT_PUBLIC_APP_URL || 'http://localhost:3000';
+
+  const session = await stripe.checkout.sessions.create({
+    payment_method_types: ['card'],
+    line_items: [
+      {
+        price_data: {
+          currency: 'inr',
+          product_data: {
+            name: `One-Time Donation: ${charity.name}`,
+            description: 'Direct independent charity contribution (does not grant draw eligibility)',
+          },
+          unit_amount: amountMinor,
+        },
+        quantity: 1,
+      },
+    ],
+    mode: 'payment',
+    success_url: `${origin}/charities?donation_success=true`,
+    cancel_url: `${origin}/charities?donation_canceled=true`,
+    metadata: {
+      userId: user?.id || null,
+      charityId,
+      donationType: 'independent',
+    },
+  });
+
+  if (session.url) {
+    redirect(session.url);
+  }
+
+  return { error: 'Failed to create donation checkout session' };
 }

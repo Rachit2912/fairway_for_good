@@ -6,13 +6,13 @@ This document accurately classifies implemented features, PRD scope compliance, 
 
 | Requirement / Scope Item | Status | Implementation Details & Evidence |
 | :--- | :--- | :--- |
+| **Database Foreign Keys to Profiles** | **Implemented** | Migration `20260108000000_fk_and_payout_security.sql` adds explicit foreign keys referencing `public.profiles(id)` across `subscriptions`, `user_roles`, `draw_awards`, `scores`, and `winner_submissions`. Verified via PostgREST nested queries in `/admin/users` and `/admin/winners`. |
+| **Draw Table Security & Lifecycle Hardening** | **Implemented** | Direct `UPDATE`/`DELETE` on `draws` table revoked from `authenticated`. All status transitions execute through security-definer procedures (`lock_monthly_draw`, `generate_monthly_draw`, `publish_monthly_draw`). |
+| **Atomic Idempotent Award Payout Procedure** | **Implemented** | Procedure `process_award_payout(p_award_id, p_reference_note)` locks records, verifies proof scorecard approval, and records payout. Retries return original payout without overwriting original timestamp/actor. Tested in `src/lib/winnerWorkflow.test.ts`. |
+| **Draw Engine Dry-Run Simulation** | **Implemented** | `adminSimulateDrawAction` in `src/app/actions/adminActions.ts` runs dry-run preview calculations with zero persistent database mutations. Rendered with explicit preview banner in `AdminDrawDetailClient`. |
+| **Independent Stripe Donations** | **Implemented** | `createDonationCheckoutSessionAction` in `src/app/actions/billingActions.ts` creates one-time Stripe checkout sessions. Webhook handler records succeeded donations in `donations` table without granting draw eligibility. |
 | **Short-Lived Admin Signed Proof URLs** | **Implemented** | Server action `getWinnerProofSignedUrlAction(storagePath)` in `src/app/actions/adminActions.ts` verifies admin role and generates a 60-second short-lived signed URL for `winner-proofs` bucket images prior to approval. Connected in `AdminWinnersClient`. |
 | **Seed Script Password Enforcement** | **Implemented** | `src/scripts/seed.ts` removed fallback default passwords. Aborts execution with a clear error if `TEST_ADMIN_PASSWORD` or `TEST_USER_PASSWORD` are missing. |
-| **Direct Table Write Revocation** | **Implemented** | Direct `INSERT`/`UPDATE`/`DELETE` permissions on `scores`, `draw_financials`, and `draw_awards` are revoked from `authenticated`. All mutations execute through security-definer procedures (`save_user_score`, `lock_monthly_draw`, `publish_monthly_draw`). |
-| **Chronological Draw Publication Guard** | **Implemented** | `publish_monthly_draw` enforces that no earlier month's draw remains in draft/locked/generated status, and no later month's draw is already published (rejecting out-of-order publication). Verified in `src/lib/drawLifecycle.test.ts`. |
-| **Paid-Through Subscription Eligibility** | **Implemented** | `lock_monthly_draw` requires `sub.current_period_end IS NOT NULL AND sub.current_period_end >= NOW()`. |
-| **Atomic Webhook Allocation RPC** | **Implemented** | `process_invoice_funding_allocation` RPC executes invoice creation and funding allocation upserts in a single transaction. Allocations linked to locked draws (`draw_id IS NOT NULL`) are frozen and preserved. |
-| **Invoice Replay Idempotency** | **Implemented** | `process_invoice_funding_allocation` returns existing invoice IDs without modifying completed allocations or charity split snapshots, and rejects conflicting replay parameters. Verified in `src/lib/drawLifecycle.test.ts`. |
 
 ---
 
@@ -24,6 +24,6 @@ This document accurately classifies implemented features, PRD scope compliance, 
 ---
 
 ## Verification Evidence
-- **Vitest Unit & Integration Suite**: 24/24 PASSED (`npm test`)
+- **Vitest Unit & Integration Suite**: 25/25 PASSED (`npm test`)
 - **ESLint**: 0 errors (`npm run lint`)
 - **Next.js Production Build**: PASSED (`npm run build`)

@@ -111,133 +111,23 @@ export async function POST(req: NextRequest) {
         }
 
         if (userId) {
-          const { data: existingInvoice } = await supabase
-            .from('invoices')
-            .select('id')
-            .eq('stripe_invoice_id', invoice.id)
-            .maybeSingle();
+          const paidAt = new Date((invoice.status_transitions?.paid_at || Date.now() / 1000) * 1000).toISOString();
+          const periodStart = new Date((invoice.period_start || Date.now() / 1000) * 1000).toISOString();
 
-          let invoiceDbId = existingInvoice?.id;
+          // Call atomic database procedure process_invoice_funding_allocation
+          const { error: rpcErr } = await supabase.rpc('process_invoice_funding_allocation', {
+            p_user_id: userId,
+            p_stripe_invoice_id: invoice.id,
+            p_amount_paid: invoice.amount_paid,
+            p_currency: invoice.currency,
+            p_plan_type: planType,
+            p_paid_at: paidAt,
+            p_period_start: periodStart,
+          });
 
-          if (!existingInvoice) {
-            const { data: insertedInvoice, error: invErr } = await supabase
-              .from('invoices')
-              .insert({
-                user_id: userId,
-                stripe_invoice_id: invoice.id,
-                amount_paid: invoice.amount_paid,
-                currency: invoice.currency,
-                plan_type: planType,
-                paid_at: new Date((invoice.status_transitions?.paid_at || Date.now() / 1000) * 1000).toISOString(),
-              })
-              .select()
-              .single();
-
-            if (invErr) {
-              console.error('Invoice insert error:', invErr);
-              return NextResponse.json({ error: invErr.message }, { status: 500 });
-            }
-            invoiceDbId = insertedInvoice.id;
-          }
-
-          if (invoiceDbId) {
-            const periodStart = new Date((invoice.period_start || Date.now() / 1000) * 1000);
-            const startYear = periodStart.getUTCFullYear();
-            const startMonth = periodStart.getUTCMonth() + 1;
-
-            const { data: profile } = await supabase
-              .from('profiles')
-              .select('selected_charity_id, charity_percentage')
-              .eq('id', userId)
-              .single();
-
-            const charityPct = profile?.charity_percentage || 10;
-            const totalAmount = invoice.amount_paid;
-
-            if (planType === 'annual') {
-              const monthlyBaseShare = Math.floor(totalAmount / 12);
-              const remainder = totalAmount - monthlyBaseShare * 12;
-
-              for (let i = 0; i < 12; i++) {
-                const covDate = new Date(Date.UTC(startYear, startMonth - 1 + i, 1));
-                const covYear = covDate.getUTCFullYear();
-                const covMonth = covDate.getUTCMonth() + 1;
-
-                // Atomic lock check: freeze allocations if draw_id IS NOT NULL
-                const { data: existingAlloc } = await supabase
-                  .from('funding_allocations')
-                  .select('draw_id')
-                  .eq('user_id', userId)
-                  .eq('coverage_year', covYear)
-                  .eq('coverage_month', covMonth)
-                  .maybeSingle();
-
-                if (existingAlloc?.draw_id) {
-                  continue; // Never modify locked or published draw funding
-                }
-
-                const monthTotal = i === 0 ? monthlyBaseShare + remainder : monthlyBaseShare;
-                const prizeShare = Math.floor(monthTotal * 0.20);
-                const charityShare = Math.floor(monthTotal * (charityPct / 100));
-                const platformShare = monthTotal - prizeShare - charityShare;
-
-                const { error: allocErr } = await supabase.from('funding_allocations').upsert(
-                  {
-                    invoice_id: invoiceDbId,
-                    user_id: userId,
-                    coverage_year: covYear,
-                    coverage_month: covMonth,
-                    total_allocated_minor: monthTotal,
-                    prize_share_minor: prizeShare,
-                    charity_share_minor: charityShare,
-                    platform_share_minor: platformShare,
-                    charity_id: profile?.selected_charity_id,
-                    charity_percentage_snapshot: charityPct,
-                  },
-                  { onConflict: 'user_id,coverage_year,coverage_month' }
-                );
-
-                if (allocErr) {
-                  console.error('Annual funding allocation error:', allocErr);
-                  return NextResponse.json({ error: allocErr.message }, { status: 500 });
-                }
-              }
-            } else {
-              const { data: existingAlloc } = await supabase
-                .from('funding_allocations')
-                .select('draw_id')
-                .eq('user_id', userId)
-                .eq('coverage_year', startYear)
-                .eq('coverage_month', startMonth)
-                .maybeSingle();
-
-              if (!existingAlloc?.draw_id) {
-                const prizeShare = Math.floor(totalAmount * 0.20);
-                const charityShare = Math.floor(totalAmount * (charityPct / 100));
-                const platformShare = totalAmount - prizeShare - charityShare;
-
-                const { error: allocErr } = await supabase.from('funding_allocations').upsert(
-                  {
-                    invoice_id: invoiceDbId,
-                    user_id: userId,
-                    coverage_year: startYear,
-                    coverage_month: startMonth,
-                    total_allocated_minor: totalAmount,
-                    prize_share_minor: prizeShare,
-                    charity_share_minor: charityShare,
-                    platform_share_minor: platformShare,
-                    charity_id: profile?.selected_charity_id,
-                    charity_percentage_snapshot: charityPct,
-                  },
-                  { onConflict: 'user_id,coverage_year,coverage_month' }
-                );
-
-                if (allocErr) {
-                  console.error('Monthly funding allocation error:', allocErr);
-                  return NextResponse.json({ error: allocErr.message }, { status: 500 });
-                }
-              }
-            }
+          if (rpcErr) {
+            console.error('Atomic process_invoice_funding_allocation RPC error:', rpcErr);
+            return NextResponse.json({ error: rpcErr.message }, { status: 500 });
           }
         }
         break;

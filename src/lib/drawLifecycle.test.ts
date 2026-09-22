@@ -32,12 +32,12 @@ describe('Database Draw Lifecycle Contract Rules', () => {
       return new Date(sub.current_period_end) >= new Date();
     }
 
-    expect(isSubscriberEligible({ status: 'active', current_period_end: null })).toBe(false); // Null period end rejected
-    expect(isSubscriberEligible({ status: 'active', current_period_end: '2020-01-01T00:00:00Z' })).toBe(false); // Expired period end rejected
-    expect(isSubscriberEligible({ status: 'active', current_period_end: '2099-01-01T00:00:00Z' })).toBe(true); // Unexpired non-null accepted
+    expect(isSubscriberEligible({ status: 'active', current_period_end: null })).toBe(false);
+    expect(isSubscriberEligible({ status: 'active', current_period_end: '2020-01-01T00:00:00Z' })).toBe(false);
+    expect(isSubscriberEligible({ status: 'active', current_period_end: '2099-01-01T00:00:00Z' })).toBe(true);
   });
 
-  it('enforces strict chronological publication order (Jan -> Mar -> Feb rejected case)', () => {
+  it('enforces strict chronological publication order and rejects out-of-order draws (Jan published -> Mar published -> Feb attempt rejected)', () => {
     const drawsInDatabase = [
       { id: 'draw_jan', month: 1, year: 2026, status: 'published' },
       { id: 'draw_mar', month: 3, year: 2026, status: 'published' },
@@ -49,35 +49,45 @@ describe('Database Draw Lifecycle Contract Rules', () => {
       if (!target) return false;
       if (target.status === 'published') return false;
 
+      // Reject publication if ANY earlier month remains uncompleted
+      const earlierUncompleted = drawsInDatabase.some(
+        (d) =>
+          (d.year < target.year || (d.year === target.year && d.month < target.month)) &&
+          d.status !== 'published'
+      );
+      if (earlierUncompleted) return false;
+
       // Reject publication if ANY later month is already published
       const laterPublished = drawsInDatabase.some(
         (d) =>
           (d.year > target.year || (d.year === target.year && d.month > target.month)) &&
           d.status === 'published'
       );
+      if (laterPublished) return false;
 
-      return !laterPublished;
+      return true;
     }
 
     // February publication MUST be rejected because March is already published
     expect(canPublishDraw('draw_feb')).toBe(false);
   });
 
-  it('ensures single-rollover consumption strictly from immediately preceding calendar month', () => {
+  it('carries forward unconsumed rollover across skipped months (Jan -> March skips Feb)', () => {
     const janFinancials = {
-      five_match_rollover_minor: 15000,
+      five_match_rollover_minor: 4000,
     };
 
-    // March draw consuming rollover from Feb (if Feb published with 15000)
+    // March draw carrying forward January rollover when Feb is skipped
     const marchDrawInput = {
       totalFundedMinor: 50000,
-      incomingRolloverMinor: janFinancials.five_match_rollover_minor,
-      winnerCounts: { fiveMatch: 1, fourMatch: 0, threeMatch: 0 },
+      incomingRolloverMinor: janFinancials.five_match_rollover_minor, // 4,000 from Jan
+      winnerCounts: { fiveMatch: 0, fourMatch: 0, threeMatch: 0 },
     };
 
     const res = calculateDrawFinancials(marchDrawInput);
-    expect(res.fiveMatchPoolMinor).toBe(19000);
-    expect(res.fiveMatchPayoutPerWinnerMinor).toBe(19000);
-    expect(res.fiveMatchRolloverMinor).toBe(0);
+    expect(res.fiveMatchPoolMinor).toBe(8000); // 4,000 base + 4,000 rollover = 8,000
+    expect(res.fiveMatchRolloverMinor).toBe(8000); // Carried forward to April
+    expect(res.unawardedReserveMinor).toBe(6000);
+    expect(res.roundingReserveMinor).toBe(0);
   });
 });

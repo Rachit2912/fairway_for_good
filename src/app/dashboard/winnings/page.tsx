@@ -16,7 +16,7 @@ export default async function MemberWinningsPage() {
   return (
     <div>
       <MemberHeader activeTab="/dashboard/winnings" userEmail={user?.email} />
-      <MemberWinningsClient awards={(awards as any) || []} />
+      <MemberWinningsClient awards={(awards as unknown as Parameters<typeof MemberWinningsClient>[0]['awards']) || []} />
     </div>
   );
 }

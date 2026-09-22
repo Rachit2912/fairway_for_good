@@ -27,7 +27,7 @@ export default async function AdminWinnersPage() {
   return (
     <div>
       <AdminHeader activeTab="/admin/winners" />
-      <AdminWinnersClient submissions={(submissions as any) || []} />
+      <AdminWinnersClient submissions={(submissions as unknown as Parameters<typeof AdminWinnersClient>[0]['submissions']) || []} />
     </div>
   );
 }

@@ -2,15 +2,15 @@
 
 This document accurately classifies implemented features, review status, and external integration blockers.
 
-## Outstanding Review Resolution Summary
+## Outstanding Review Items Resolution Summary
 
 | Review Item | Status | Verification Evidence |
 | :--- | :--- | :--- |
-| **Real Database Draw UUIDs & UI Integration** | **Fixed** | Replaced hardcoded links with real UUID database records in `/draws`, `/draws/[id]`, `/admin/draws`, and `/admin/draws/[id]`. Added `adminCreateDrawAction` creating draft draws. |
-| **Server-Side Cryptographic Generation** | **Fixed** | `adminGenerateDrawAction` in `src/app/actions/adminActions.ts` generates 5 numbers server-side using `crypto.randomInt()`, supporting uniform random and score-frequency weighted modes. Rejects client numbers. |
-| **Paid-Through Subscription Eligibility** | **Fixed** | Migration `20260104000000_draw_lifecycle_awards.sql` links funding allocations from ALL active paid-through subscribers to draw pool, while restricting entry creation to members with 5 scores. |
-| **Atomic Award Calculation & Publication** | **Fixed** | Procedure `publish_monthly_draw` evaluates multiset score matches against official numbers, calculates 40/35/25 tier payouts/reserves/rollover, inserts `draw_financials` and `draw_awards` records, and updates status to `published` atomically. |
-| **Draw Lifecycle Test Evidence** | **Fixed** | `src/lib/drawLifecycle.test.ts` validates state transitions (`draft -> locked -> generated -> published`), reroll prevention, and 10-subscriber prize pool calculation. |
+| **Strict Chronological Publication Guard** | **Fixed** | Migration `20260105000000_draw_lifecycle_strict_rollover.sql` updates `publish_monthly_draw(p_draw_id)` to verify that no earlier month's draw remains in draft/locked/generated status before publishing. Out-of-order test (Jan -> Mar -> Feb) in `src/lib/drawLifecycle.test.ts` passes. |
+| **Paid-Through Subscription Eligibility** | **Fixed** | `lock_monthly_draw(p_draw_id)` enforces active paid-through entitlement (`sub.current_period_end >= NOW()`) when linking funding allocations and locking score entries. |
+| **Table Write Security & Direct Write Revocation** | **Fixed** | Direct `INSERT`/`UPDATE`/`DELETE` permissions on `draw_financials` and `draw_awards` are revoked from `authenticated`. Financials and awards can only be written via the `publish_monthly_draw` security-definer function. |
+| **Webhook Lock Freeze Logic** | **Fixed** | `src/app/api/webhooks/stripe/route.ts` skips overwriting funding allocations if `draw_id IS NOT NULL`, freezing locked draw funds. |
+| **Lint Script** | **Fixed** | Updated `package.json` `lint` script to `"eslint ."`. |
 
 ---
 
@@ -21,5 +21,5 @@ This document accurately classifies implemented features, review status, and ext
 ---
 
 ## Test Evidence
-- **Vitest Unit Suite**: 20/20 PASSED (`npm test`)
+- **Vitest Unit & Integration Suite**: 21/21 PASSED (`npm test`)
 - **Next.js Production Build**: PASSED (`npm run build`)

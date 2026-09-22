@@ -26,8 +26,80 @@ export async function adminCreateDrawAction(year: number, month: number, mode: '
   return { success: true, data };
 }
 
+export async function adminSimulateDrawAction(drawId: string) {
+  const supabase = await createClient();
+  const { data: draw, error: drawErr } = await supabase
+    .from('draws')
+    .select('*')
+    .eq('id', drawId)
+    .single();
+
+  if (drawErr || !draw) {
+    return { error: 'Draw record not found' };
+  }
+
+  const numbers = Array.from({ length: 5 }, () => crypto.randomInt(1, 46));
+
+  const { data: entries } = await supabase
+    .from('draw_entries')
+    .select('user_id, score_values')
+    .eq('draw_id', drawId);
+
+  let match5 = 0;
+  let match4 = 0;
+  let match3 = 0;
+
+  if (entries) {
+    for (const entry of entries) {
+      const eCounts = new Map<number, number>();
+      const dCounts = new Map<number, number>();
+
+      for (const v of entry.score_values) eCounts.set(v, (eCounts.get(v) || 0) + 1);
+      for (const v of numbers) dCounts.set(v, (dCounts.get(v) || 0) + 1);
+
+      let m = 0;
+      for (const [val, count] of eCounts.entries()) {
+        m += Math.min(count, dCounts.get(val) || 0);
+      }
+
+      if (m === 5) match5++;
+      else if (m === 4) match4++;
+      else if (m === 3) match3++;
+    }
+  }
+
+  return {
+    success: true,
+    simulation: {
+      drawId,
+      previewNumbers: numbers,
+      projectedWinners: { fiveMatch: match5, fourMatch: match4, threeMatch: match3 },
+      isDryRun: true,
+    },
+  };
+}
+
 export async function adminGenerateDrawAction(drawId: string) {
   const supabase = await createClient();
+  const {
+    data: { user },
+  } = await supabase.auth.getUser();
+
+  if (!user) {
+    return { error: 'Authentication required' };
+  }
+
+  // Check admin role
+  const { data: roleData } = await supabase
+    .from('user_roles')
+    .select('role')
+    .eq('user_id', user.id)
+    .maybeSingle();
+
+  if (!roleData || roleData.role !== 'admin') {
+    return { error: 'Admin privileges required' };
+  }
+
   const { data: draw, error: drawErr } = await supabase
     .from('draws')
     .select('*')
@@ -82,7 +154,9 @@ export async function adminGenerateDrawAction(drawId: string) {
     }
   }
 
-  const { data: updatedDraw, error: genErr } = await supabase.rpc('generate_monthly_draw', {
+  // Call generate_monthly_draw using admin service-role client since RPC is restricted from public/authenticated callers
+  const adminSupabase = createAdminClient();
+  const { data: updatedDraw, error: genErr } = await adminSupabase.rpc('generate_monthly_draw', {
     p_draw_id: drawId,
     p_winning_numbers: numbers,
   });
@@ -208,7 +282,6 @@ export async function getWinnerProofSignedUrlAction(storagePath: string) {
     return { error: 'Authentication required' };
   }
 
-  // Check admin role
   const { data: roleData } = await supabase
     .from('user_roles')
     .select('role')
@@ -222,7 +295,7 @@ export async function getWinnerProofSignedUrlAction(storagePath: string) {
   const adminSupabase = createAdminClient();
   const { data, error } = await adminSupabase.storage
     .from('winner-proofs')
-    .createSignedUrl(storagePath, 60); // 60 seconds short-lived expiry
+    .createSignedUrl(storagePath, 60);
 
   if (error || !data?.signedUrl) {
     return { error: 'Failed to generate signed URL for proof image' };
@@ -264,39 +337,102 @@ export async function adminReviewProofAction(awardId: string, approved: boolean,
 
 export async function adminProcessPayoutAction(awardId: string, referenceNote?: string) {
   const supabase = await createClient();
-  const {
-    data: { user },
-  } = await supabase.auth.getUser();
-
-  if (!user) {
-    return { error: 'Authentication required' };
-  }
-
-  const { data: sub } = await supabase
-    .from('winner_submissions')
-    .select('review_status')
-    .eq('award_id', awardId)
-    .single();
-
-  if (!sub || sub.review_status !== 'approved') {
-    return { error: 'Cannot process payout before proof is approved' };
-  }
-
-  const { error } = await supabase.from('payouts').upsert(
-    {
-      award_id: awardId,
-      status: 'paid',
-      reference_note: referenceNote || 'Payout completed by admin',
-      processed_by: user.id,
-      processed_at: new Date().toISOString(),
-    },
-    { onConflict: 'award_id' }
-  );
+  const { data, error } = await supabase.rpc('process_award_payout', {
+    p_award_id: awardId,
+    p_reference_note: referenceNote || 'Payout completed by admin',
+  });
 
   if (error) {
     return { error: error.message };
   }
 
   revalidatePath('/admin/winners');
+  return { success: true, data };
+}
+
+export async function adminCreateCharityAction(formData: FormData) {
+  const name = formData.get('name') as string;
+  const slug = formData.get('slug') as string;
+  const tagline = formData.get('tagline') as string;
+  const description = formData.get('description') as string;
+  const category = formData.get('category') as string;
+  const featured = formData.get('featured') === 'true';
+
+  const supabase = await createClient();
+  const { data, error } = await supabase
+    .from('charities')
+    .insert({
+      name,
+      slug,
+      tagline,
+      description,
+      category,
+      featured,
+      active: true,
+    })
+    .select()
+    .single();
+
+  if (error) {
+    return { error: error.message };
+  }
+
+  revalidatePath('/admin/charities');
+  revalidatePath('/charities');
+  return { success: true, data };
+}
+
+export async function adminCreateCharityEventAction(formData: FormData) {
+  const charityId = formData.get('charity_id') as string;
+  const title = formData.get('title') as string;
+  const description = formData.get('description') as string;
+  const eventDate = formData.get('event_date') as string;
+  const location = formData.get('location') as string;
+
+  const supabase = await createClient();
+  const { data, error } = await supabase
+    .from('charity_events')
+    .insert({
+      charity_id: charityId,
+      title,
+      description,
+      event_date: eventDate,
+      location,
+    })
+    .select()
+    .single();
+
+  if (error) {
+    return { error: error.message };
+  }
+
+  revalidatePath('/admin/charities');
+  return { success: true, data };
+}
+
+export async function adminReconcileSubscriptionAction(userId: string) {
+  const adminSupabase = createAdminClient();
+  const { data: sub } = await adminSupabase
+    .from('subscriptions')
+    .select('*')
+    .eq('user_id', userId)
+    .single();
+
+  if (!sub?.stripe_subscription_id) {
+    return { error: 'No Stripe subscription ID found for user' };
+  }
+
+  const { error } = await adminSupabase
+    .from('subscriptions')
+    .update({
+      last_reconciled_at: new Date().toISOString(),
+    })
+    .eq('user_id', userId);
+
+  if (error) {
+    return { error: error.message };
+  }
+
+  revalidatePath('/admin/users');
   return { success: true };
 }

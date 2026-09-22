@@ -5,9 +5,9 @@ Fairway for Good is a community subscription web application combining golf Stab
 ## Key Features Implemented
 - **Public & Marketing Pages**: Homepage with transparent funding breakdown, How It Works, Pricing plans (INR 999/mo & INR 9,990/yr), Charity Directory, and Draw Results.
 - **Member Dashboard**: Score management retaining the 5 greatest round dates (1–45 integers), charity split selection (10%–80%), Stripe billing management, draw history, and winning proof uploads.
-- **Admin Suite**: User management, charity CRUD, monthly draw lifecycle (simulation, locking, cryptographic generation, publication), winner proof screenshot approval, short-lived signed proof URL generation, and financial reports.
+- **Admin Suite**: User management, charity CRUD, monthly draw lifecycle (dry-run simulation, locking, cryptographic generation, publication), winner proof screenshot approval, short-lived signed proof URL generation, and financial reports.
 - **Draw Engine & Math**: Exact multiset matching (`sum(min(entry_count, draw_count))`), fixed 20% prize pool distribution across 5-match (40%), 4-match (35%), and 3-match (25%) tiers, integer minor unit precision with zero money lost, and 5-match jackpot rollover carried forward across skipped months.
-- **Stripe Integration**: Test mode webhooks with signature verification, raw body parsing, idempotent invoice tracking, and 12-month annual allocation distribution.
+- **Stripe Integration**: Test mode webhooks with signature verification, raw body parsing, idempotent invoice tracking, independent one-time charity donations, and 12-month annual allocation distribution.
 
 ---
 
@@ -23,6 +23,7 @@ Fairway for Good is a community subscription web application combining golf Stab
    - `supabase/migrations/20260105000000_draw_lifecycle_strict_rollover.sql`
    - `supabase/migrations/20260106000000_strict_chronological_rollover_and_paid_period.sql`
    - `supabase/migrations/20260107000000_atomic_webhook_and_rollover_preservation.sql`
+   - `supabase/migrations/20260108000000_fk_and_payout_security.sql`
 3. Create a private storage bucket named `winner-proofs` in Supabase Storage. Ensure public access is disabled.
 4. In Supabase Authentication settings, add your deployment domain URL to Site URL and Redirect URLs.
 
@@ -51,9 +52,9 @@ NEXT_PUBLIC_STRIPE_ANNUAL_PRICE_ID=price_annual...
 NEXT_PUBLIC_APP_URL=http://localhost:3000
 
 TEST_ADMIN_EMAIL=admin@fairwayforgood.org
-TEST_ADMIN_PASSWORD=RequiredAdminPassword123!
+TEST_ADMIN_PASSWORD=YOUR_UNMISTAKABLE_ADMIN_PASSWORD_PLACEHOLDER
 TEST_USER_EMAIL=member@fairwayforgood.org
-TEST_USER_PASSWORD=RequiredMemberPassword123!
+TEST_USER_PASSWORD=YOUR_UNMISTAKABLE_MEMBER_PASSWORD_PLACEHOLDER
 ```
 
 ### 4. Database Seeding
@@ -64,7 +65,7 @@ npm run seed
 
 ### 5. Running Tests & Production Build
 ```bash
-# Run Vitest test suite (24 passing unit/integration tests)
+# Run Vitest test suite (25 passing unit/integration tests)
 npm test
 
 # Run ESLint check

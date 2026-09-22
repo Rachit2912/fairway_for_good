@@ -13,7 +13,7 @@ export async function POST(req: NextRequest) {
       const fullName = formData.get('full_name') as string;
       const charityPercentage = parseInt((formData.get('charity_percentage') as string) || '10', 10);
 
-      const { data, error } = await supabase.auth.signUp({
+      const { error } = await supabase.auth.signUp({
         email,
         password,
         options: {
@@ -33,7 +33,7 @@ export async function POST(req: NextRequest) {
       const email = formData.get('email') as string;
       const password = formData.get('password') as string;
 
-      const { data, error } = await supabase.auth.signInWithPassword({
+      const { error } = await supabase.auth.signInWithPassword({
         email,
         password,
       });
@@ -44,7 +44,8 @@ export async function POST(req: NextRequest) {
 
       return NextResponse.redirect(new URL('/dashboard', req.url));
     }
-  } catch (err: any) {
-    return NextResponse.json({ error: err.message }, { status: 500 });
+  } catch (err: unknown) {
+    const message = err instanceof Error ? err.message : 'Unknown error';
+    return NextResponse.json({ error: message }, { status: 500 });
   }
 }

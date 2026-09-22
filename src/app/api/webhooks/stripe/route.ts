@@ -14,9 +14,10 @@ export async function POST(req: NextRequest) {
   let event;
   try {
     event = stripe.webhooks.constructEvent(body, signature, webhookSecret);
-  } catch (err: any) {
-    console.error('Stripe webhook signature verification failed:', err.message);
-    return NextResponse.json({ error: `Webhook Error: ${err.message}` }, { status: 400 });
+  } catch (err: unknown) {
+    const msg = err instanceof Error ? err.message : 'Unknown error';
+    console.error('Stripe webhook signature verification failed:', msg);
+    return NextResponse.json({ error: `Webhook Error: ${msg}` }, { status: 400 });
   }
 
   const supabase = createAdminClient();
@@ -24,19 +25,19 @@ export async function POST(req: NextRequest) {
   try {
     switch (event.type) {
       case 'checkout.session.completed': {
-        const session = event.data.object as any;
+        const session = event.data.object as { client_reference_id?: string; metadata?: { userId?: string }; subscription?: string; customer?: string };
         const userId = session.client_reference_id || session.metadata?.userId;
         const subscriptionId = session.subscription;
         const customerId = session.customer;
 
         if (userId && subscriptionId) {
-          const subDetails = (await stripe.subscriptions.retrieve(subscriptionId)) as any;
+          const subDetails = (await stripe.subscriptions.retrieve(subscriptionId)) as unknown as { items: { data: Array<{ price?: { id?: string } }> }; status: string; current_period_start: number; current_period_end: number; cancel_at_period_end: boolean };
           const planType =
             subDetails.items.data[0]?.price?.id === process.env.NEXT_PUBLIC_STRIPE_ANNUAL_PRICE_ID
               ? 'annual'
               : 'monthly';
 
-          await supabase.from('subscriptions').upsert(
+          const { error: subErr } = await supabase.from('subscriptions').upsert(
             {
               user_id: userId,
               stripe_customer_id: customerId,
@@ -50,12 +51,17 @@ export async function POST(req: NextRequest) {
             },
             { onConflict: 'user_id' }
           );
+
+          if (subErr) {
+            console.error('Subscription upsert database error:', subErr);
+            return NextResponse.json({ error: subErr.message }, { status: 500 });
+          }
         }
         break;
       }
 
       case 'invoice.payment_succeeded': {
-        const invoice = event.data.object as any;
+        const invoice = event.data.object as { subscription?: string; customer?: string; id: string; amount_paid: number; currency: string; period_start?: number; status_transitions?: { paid_at?: number } };
         const subscriptionId = invoice.subscription;
         const customerId = invoice.customer;
 
@@ -73,8 +79,7 @@ export async function POST(req: NextRequest) {
             userId = subData.user_id;
             planType = (subData.plan_type as 'monthly' | 'annual') || 'monthly';
           } else {
-            // Retrieve subscription directly from Stripe to prevent race conditions
-            const stripeSub = (await stripe.subscriptions.retrieve(subscriptionId)) as any;
+            const stripeSub = (await stripe.subscriptions.retrieve(subscriptionId)) as unknown as { metadata?: { userId?: string }; items?: { data: Array<{ price?: { id?: string } }> }; status: string; current_period_start: number; current_period_end: number; cancel_at_period_end: boolean };
             userId = stripeSub.metadata?.userId || null;
             planType =
               stripeSub.items?.data[0]?.price?.id === process.env.NEXT_PUBLIC_STRIPE_ANNUAL_PRICE_ID
@@ -82,7 +87,7 @@ export async function POST(req: NextRequest) {
                 : 'monthly';
 
             if (userId) {
-              await supabase.from('subscriptions').upsert(
+              const { error: subErr } = await supabase.from('subscriptions').upsert(
                 {
                   user_id: userId,
                   stripe_customer_id: customerId,
@@ -96,6 +101,11 @@ export async function POST(req: NextRequest) {
                 },
                 { onConflict: 'user_id' }
               );
+
+              if (subErr) {
+                console.error('Subscription fallback upsert error:', subErr);
+                return NextResponse.json({ error: subErr.message }, { status: 500 });
+              }
             }
           }
         }
@@ -125,7 +135,7 @@ export async function POST(req: NextRequest) {
 
             if (invErr) {
               console.error('Invoice insert error:', invErr);
-              throw invErr;
+              return NextResponse.json({ error: invErr.message }, { status: 500 });
             }
             invoiceDbId = insertedInvoice.id;
           }
@@ -162,15 +172,7 @@ export async function POST(req: NextRequest) {
                   .maybeSingle();
 
                 if (existingAlloc?.draw_id) {
-                  const { data: linkedDraw } = await supabase
-                    .from('draws')
-                    .select('status')
-                    .eq('id', existingAlloc.draw_id)
-                    .maybeSingle();
-
-                  if (linkedDraw?.status === 'published') {
-                    continue;
-                  }
+                  continue;
                 }
 
                 const monthTotal = i === 0 ? monthlyBaseShare + remainder : monthlyBaseShare;
@@ -178,7 +180,7 @@ export async function POST(req: NextRequest) {
                 const charityShare = Math.floor(monthTotal * (charityPct / 100));
                 const platformShare = monthTotal - prizeShare - charityShare;
 
-                await supabase.from('funding_allocations').upsert(
+                const { error: allocErr } = await supabase.from('funding_allocations').upsert(
                   {
                     invoice_id: invoiceDbId,
                     user_id: userId,
@@ -193,6 +195,11 @@ export async function POST(req: NextRequest) {
                   },
                   { onConflict: 'user_id,coverage_year,coverage_month' }
                 );
+
+                if (allocErr) {
+                  console.error('Annual funding allocation error:', allocErr);
+                  return NextResponse.json({ error: allocErr.message }, { status: 500 });
+                }
               }
             } else {
               const { data: existingAlloc } = await supabase
@@ -203,25 +210,12 @@ export async function POST(req: NextRequest) {
                 .eq('coverage_month', startMonth)
                 .maybeSingle();
 
-              let skipAllocation = false;
-              if (existingAlloc?.draw_id) {
-                const { data: linkedDraw } = await supabase
-                  .from('draws')
-                  .select('status')
-                  .eq('id', existingAlloc.draw_id)
-                  .maybeSingle();
-
-                if (linkedDraw?.status === 'published') {
-                  skipAllocation = true;
-                }
-              }
-
-              if (!skipAllocation) {
+              if (!existingAlloc?.draw_id) {
                 const prizeShare = Math.floor(totalAmount * 0.20);
                 const charityShare = Math.floor(totalAmount * (charityPct / 100));
                 const platformShare = totalAmount - prizeShare - charityShare;
 
-                await supabase.from('funding_allocations').upsert(
+                const { error: allocErr } = await supabase.from('funding_allocations').upsert(
                   {
                     invoice_id: invoiceDbId,
                     user_id: userId,
@@ -236,6 +230,11 @@ export async function POST(req: NextRequest) {
                   },
                   { onConflict: 'user_id,coverage_year,coverage_month' }
                 );
+
+                if (allocErr) {
+                  console.error('Monthly funding allocation error:', allocErr);
+                  return NextResponse.json({ error: allocErr.message }, { status: 500 });
+                }
               }
             }
           }
@@ -245,8 +244,8 @@ export async function POST(req: NextRequest) {
 
       case 'customer.subscription.updated':
       case 'customer.subscription.deleted': {
-        const sub = event.data.object as any;
-        await supabase
+        const sub = event.data.object as { id: string; status: string; current_period_start: number; current_period_end: number; cancel_at_period_end: boolean };
+        const { error: updateErr } = await supabase
           .from('subscriptions')
           .update({
             status: sub.status,
@@ -256,12 +255,17 @@ export async function POST(req: NextRequest) {
             last_reconciled_at: new Date().toISOString(),
           })
           .eq('stripe_subscription_id', sub.id);
+
+        if (updateErr) {
+          console.error('Subscription update error:', updateErr);
+          return NextResponse.json({ error: updateErr.message }, { status: 500 });
+        }
         break;
       }
     }
 
     return NextResponse.json({ received: true });
-  } catch (err: any) {
+  } catch (err: unknown) {
     console.error('Error handling Stripe webhook event:', err);
     return NextResponse.json({ error: 'Webhook processing failed' }, { status: 500 });
   }

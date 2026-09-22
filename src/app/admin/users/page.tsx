@@ -43,8 +43,10 @@ export default async function AdminUsersPage() {
               <tbody className="divide-y divide-[#e2ded4]">
                 {profiles && profiles.length > 0 ? (
                   profiles.map((p) => {
-                    const role = (p.user_roles as any)?.[0]?.role || 'member';
-                    const sub = (p.subscriptions as any)?.[0];
+                    const roleData = p.user_roles as unknown as Array<{ role: string }> | null;
+                    const role = roleData?.[0]?.role || 'member';
+                    const subData = p.subscriptions as unknown as Array<{ status: string; plan_type: string }> | null;
+                    const sub = subData?.[0];
 
                     return (
                       <tr key={p.id}>

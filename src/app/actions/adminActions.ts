@@ -42,10 +42,9 @@ export async function adminGenerateDrawAction(drawId: string) {
     return { error: 'Draw must be locked before generating official numbers' };
   }
 
-  let numbers: number[] = [];
+  const numbers: number[] = [];
 
   if (draw.mode === 'weighted') {
-    // Score-frequency weighted mode
     const { data: entries } = await supabase
       .from('draw_entries')
       .select('score_values')
@@ -53,7 +52,7 @@ export async function adminGenerateDrawAction(drawId: string) {
 
     const weights = new Map<number, number>();
     for (let i = 1; i <= 45; i++) {
-      weights.set(i, 1); // baseline weight = 1
+      weights.set(i, 1);
     }
 
     if (entries) {
@@ -78,7 +77,6 @@ export async function adminGenerateDrawAction(drawId: string) {
       numbers.push(pool[idx]);
     }
   } else {
-    // Uniform random mode with cryptographically secure randomInt
     for (let i = 0; i < 5; i++) {
       numbers.push(crypto.randomInt(1, 46));
     }

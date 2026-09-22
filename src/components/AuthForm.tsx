@@ -118,7 +118,7 @@ export function AuthForm({ mode }: { mode: 'login' | 'signup' }) {
             </p>
           ) : (
             <p>
-              Don't have an account yet?{' '}
+              Don&apos;t have an account yet?{' '}
               <Link href="/signup" className="font-semibold text-[#0f4c46] hover:underline">
                 Create one now
               </Link>

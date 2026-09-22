@@ -198,6 +198,39 @@ export async function uploadWinnerProofAction(awardId: string, formData: FormDat
   return { success: true };
 }
 
+export async function getWinnerProofSignedUrlAction(storagePath: string) {
+  const supabase = await createClient();
+  const {
+    data: { user },
+  } = await supabase.auth.getUser();
+
+  if (!user) {
+    return { error: 'Authentication required' };
+  }
+
+  // Check admin role
+  const { data: roleData } = await supabase
+    .from('user_roles')
+    .select('role')
+    .eq('user_id', user.id)
+    .maybeSingle();
+
+  if (!roleData || roleData.role !== 'admin') {
+    return { error: 'Admin privileges required to view winner proof' };
+  }
+
+  const adminSupabase = createAdminClient();
+  const { data, error } = await adminSupabase.storage
+    .from('winner-proofs')
+    .createSignedUrl(storagePath, 60); // 60 seconds short-lived expiry
+
+  if (error || !data?.signedUrl) {
+    return { error: 'Failed to generate signed URL for proof image' };
+  }
+
+  return { success: true, signedUrl: data.signedUrl };
+}
+
 export async function adminReviewProofAction(awardId: string, approved: boolean, reason?: string) {
   const supabase = await createClient();
   const {

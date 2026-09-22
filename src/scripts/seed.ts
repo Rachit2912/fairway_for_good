@@ -5,6 +5,15 @@ dotenv.config();
 
 async function seed() {
   console.log('Starting Fairway for Good Database Seed...');
+
+  const adminPassword = process.env.TEST_ADMIN_PASSWORD;
+  const memberPassword = process.env.TEST_USER_PASSWORD;
+
+  if (!adminPassword || !memberPassword) {
+    console.error('SEED ERROR: TEST_ADMIN_PASSWORD and TEST_USER_PASSWORD environment variables are strictly required for seed execution.');
+    process.exit(1);
+  }
+
   const supabase = createAdminClient();
 
   // 1. Seed Charities
@@ -58,7 +67,6 @@ async function seed() {
       } else {
         console.log(`Created charity: ${charity.name} (${data.id})`);
 
-        // Add sample charity event
         await supabase.from('charity_events').insert({
           charity_id: data.id,
           title: `${charity.name} Annual Charity Scramble`,
@@ -74,7 +82,6 @@ async function seed() {
 
   // 2. Create Admin User
   const adminEmail = process.env.TEST_ADMIN_EMAIL || 'admin@fairwayforgood.org';
-  const adminPassword = process.env.TEST_ADMIN_PASSWORD || 'AdminPassword123!';
 
   const { data: usersList } = await supabase.auth.admin.listUsers();
   let adminUser = usersList.users.find((u) => u.email === adminEmail);
@@ -100,7 +107,6 @@ async function seed() {
     console.log(`Admin user ${adminEmail} already exists.`);
   }
 
-  // Ensure user_roles has admin role
   if (adminUser) {
     await supabase.from('user_roles').upsert({
       user_id: adminUser.id,
@@ -110,7 +116,6 @@ async function seed() {
 
   // 3. Create Sample Member User
   const memberEmail = process.env.TEST_USER_EMAIL || 'member@fairwayforgood.org';
-  const memberPassword = process.env.TEST_USER_PASSWORD || 'MemberPassword123!';
 
   let memberUser = usersList.users.find((u) => u.email === memberEmail);
 

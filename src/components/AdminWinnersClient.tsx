@@ -1,7 +1,11 @@
 'use client';
 
 import { useState } from 'react';
-import { adminReviewProofAction, adminProcessPayoutAction } from '@/app/actions/adminActions';
+import {
+  adminReviewProofAction,
+  adminProcessPayoutAction,
+  getWinnerProofSignedUrlAction,
+} from '@/app/actions/adminActions';
 
 export function AdminWinnersClient({
   submissions,
@@ -23,6 +27,16 @@ export function AdminWinnersClient({
   const [loading, setLoading] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [success, setSuccess] = useState<string | null>(null);
+
+  async function handleViewProof(storagePath: string) {
+    setError(null);
+    const res = await getWinnerProofSignedUrlAction(storagePath);
+    if (res?.error) {
+      setError(res.error);
+    } else if (res?.signedUrl) {
+      window.open(res.signedUrl, '_blank', 'noopener,noreferrer');
+    }
+  }
 
   async function handleReview(awardId: string, approved: boolean) {
     setLoading(awardId);
@@ -76,6 +90,7 @@ export function AdminWinnersClient({
               <tr>
                 <th className="px-4 py-3 rounded-l-xl">Winner Details</th>
                 <th className="px-4 py-3">Tier & Award Amount</th>
+                <th className="px-4 py-3">Scorecard Proof</th>
                 <th className="px-4 py-3">Review Status</th>
                 <th className="px-4 py-3">Payout Status</th>
                 <th className="px-4 py-3 rounded-r-xl text-right">Actions</th>
@@ -99,6 +114,14 @@ export function AdminWinnersClient({
                           ₹{((award?.amount_minor || 0) / 100).toFixed(2)}
                         </p>
                         <p className="text-xs text-[#1a1d20]/70">{award?.tier}-Match Tier</p>
+                      </td>
+                      <td className="px-4 py-3">
+                        <button
+                          onClick={() => handleViewProof(sub.storage_path)}
+                          className="text-xs font-semibold text-[#0f4c46] hover:underline bg-[#f4f1ea] px-3 py-1.5 rounded-lg border border-[#e2ded4]"
+                        >
+                          View Signed Proof ↗
+                        </button>
                       </td>
                       <td className="px-4 py-3">
                         <span className="text-xs font-semibold uppercase px-2.5 py-1 rounded-full bg-amber-100 text-amber-800">
@@ -144,7 +167,7 @@ export function AdminWinnersClient({
                 })
               ) : (
                 <tr>
-                  <td colSpan={5} className="px-4 py-6 text-center text-xs text-[#1a1d20]/60 italic">
+                  <td colSpan={6} className="px-4 py-6 text-center text-xs text-[#1a1d20]/60 italic">
                     No winner submissions awaiting review.
                   </td>
                 </tr>

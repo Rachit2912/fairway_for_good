@@ -1,11 +1,11 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { createAdminClient } from '@/lib/supabase/admin';
+import { createClient } from '@/lib/supabase/server';
 
 export async function POST(req: NextRequest) {
   try {
     const formData = await req.formData();
     const action = formData.get('action') as string;
-    const supabase = createAdminClient();
+    const supabase = await createClient();
 
     if (action === 'signup') {
       const email = formData.get('email') as string;

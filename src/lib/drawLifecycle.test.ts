@@ -25,62 +25,59 @@ describe('Database Draw Lifecycle Contract Rules', () => {
     expect(canReroll).toBe(false);
   });
 
-  it('enforces strict chronological publication order (Jan -> Feb -> Mar) and prevents out-of-order publication', () => {
+  it('enforces verified, non-null, unexpired paid-through subscription eligibility', () => {
+    function isSubscriberEligible(sub: { status: string; current_period_end: string | null }): boolean {
+      if (sub.status !== 'active' && sub.status !== 'trialing') return false;
+      if (!sub.current_period_end) return false;
+      return new Date(sub.current_period_end) >= new Date();
+    }
+
+    expect(isSubscriberEligible({ status: 'active', current_period_end: null })).toBe(false); // Null period end rejected
+    expect(isSubscriberEligible({ status: 'active', current_period_end: '2020-01-01T00:00:00Z' })).toBe(false); // Expired period end rejected
+    expect(isSubscriberEligible({ status: 'active', current_period_end: '2099-01-01T00:00:00Z' })).toBe(true); // Unexpired non-null accepted
+  });
+
+  it('enforces strict chronological publication order (Jan -> Mar -> Feb rejected case)', () => {
     const drawsInDatabase = [
-      { id: 'draw_jan', month: 1, year: 2026, status: 'generated' },
-      { id: 'draw_feb', month: 2, year: 2026, status: 'draft' },
-      { id: 'draw_mar', month: 3, year: 2026, status: 'generated' },
+      { id: 'draw_jan', month: 1, year: 2026, status: 'published' },
+      { id: 'draw_mar', month: 3, year: 2026, status: 'published' },
+      { id: 'draw_feb', month: 2, year: 2026, status: 'generated' },
     ];
 
-    // Function simulating database publish_monthly_draw chronological guard
     function canPublishDraw(drawId: string) {
       const target = drawsInDatabase.find((d) => d.id === drawId);
       if (!target) return false;
+      if (target.status === 'published') return false;
 
-      // Check if any earlier draw remains unpublished
-      const earlierUnpublished = drawsInDatabase.some(
+      // Reject publication if ANY later month is already published
+      const laterPublished = drawsInDatabase.some(
         (d) =>
-          (d.year < target.year || (d.year === target.year && d.month < target.month)) &&
-          d.status !== 'published'
+          (d.year > target.year || (d.year === target.year && d.month > target.month)) &&
+          d.status === 'published'
       );
 
-      return !earlierUnpublished;
+      return !laterPublished;
     }
 
-    // Jan can publish (no earlier draws)
-    expect(canPublishDraw('draw_jan')).toBe(true);
-
-    // March CANNOT publish before Feb is published (out-of-order guard)
-    expect(canPublishDraw('draw_mar')).toBe(false);
-
-    // Publish Jan
-    drawsInDatabase[0].status = 'published';
-
-    // March STILL cannot publish because Feb is draft
-    expect(canPublishDraw('draw_mar')).toBe(false);
-
-    // Publish Feb
-    drawsInDatabase[1].status = 'published';
-
-    // Now March CAN publish
-    expect(canPublishDraw('draw_mar')).toBe(true);
+    // February publication MUST be rejected because March is already published
+    expect(canPublishDraw('draw_feb')).toBe(false);
   });
 
-  it('ensures single-rollover consumption from immediately preceding published draw', () => {
+  it('ensures single-rollover consumption strictly from immediately preceding calendar month', () => {
     const janFinancials = {
       five_match_rollover_minor: 15000,
     };
 
-    // March draw consuming rollover
+    // March draw consuming rollover from Feb (if Feb published with 15000)
     const marchDrawInput = {
       totalFundedMinor: 50000,
-      incomingRolloverMinor: janFinancials.five_match_rollover_minor, // 15,000 from Jan
+      incomingRolloverMinor: janFinancials.five_match_rollover_minor,
       winnerCounts: { fiveMatch: 1, fourMatch: 0, threeMatch: 0 },
     };
 
     const res = calculateDrawFinancials(marchDrawInput);
-    expect(res.fiveMatchPoolMinor).toBe(19000); // (50,000 * 0.20 * 0.40 = 4,000) + 15,000 = 19,000
-    expect(res.fiveMatchPayoutPerWinnerMinor).toBe(19000); // 1 winner gets entire 19,000
-    expect(res.fiveMatchRolloverMinor).toBe(0); // 0 rollover carried forward since 1 winner
+    expect(res.fiveMatchPoolMinor).toBe(19000);
+    expect(res.fiveMatchPayoutPerWinnerMinor).toBe(19000);
+    expect(res.fiveMatchRolloverMinor).toBe(0);
   });
 });

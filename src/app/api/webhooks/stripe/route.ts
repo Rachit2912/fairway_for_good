@@ -163,6 +163,7 @@ export async function POST(req: NextRequest) {
                 const covYear = covDate.getUTCFullYear();
                 const covMonth = covDate.getUTCMonth() + 1;
 
+                // Atomic lock check: freeze allocations if draw_id IS NOT NULL
                 const { data: existingAlloc } = await supabase
                   .from('funding_allocations')
                   .select('draw_id')
@@ -172,7 +173,7 @@ export async function POST(req: NextRequest) {
                   .maybeSingle();
 
                 if (existingAlloc?.draw_id) {
-                  continue;
+                  continue; // Never modify locked or published draw funding
                 }
 
                 const monthTotal = i === 0 ? monthlyBaseShare + remainder : monthlyBaseShare;

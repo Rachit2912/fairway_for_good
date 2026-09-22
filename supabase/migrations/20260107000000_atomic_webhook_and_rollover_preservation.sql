@@ -19,6 +19,8 @@ SET search_path = public
 AS $$
 DECLARE
   v_invoice_id UUID;
+  v_existing_amount INTEGER;
+  v_existing_currency TEXT;
   v_start_year INTEGER;
   v_start_month INTEGER;
   v_profile RECORD;
@@ -35,30 +37,39 @@ DECLARE
   v_existing_draw_id UUID;
   i INTEGER;
 BEGIN
-  -- A. Record invoice idempotently
-  SELECT id INTO v_invoice_id
+  -- A. Check if invoice was previously processed
+  SELECT id, amount_paid, currency INTO v_invoice_id, v_existing_amount, v_existing_currency
   FROM public.invoices
   WHERE stripe_invoice_id = p_stripe_invoice_id;
 
-  IF v_invoice_id IS NULL THEN
-    INSERT INTO public.invoices (
-      user_id,
-      stripe_invoice_id,
-      amount_paid,
-      currency,
-      plan_type,
-      paid_at
-    ) VALUES (
-      p_user_id,
-      p_stripe_invoice_id,
-      p_amount_paid,
-      p_currency,
-      p_plan_type,
-      p_paid_at
-    ) RETURNING id INTO v_invoice_id;
+  IF v_invoice_id IS NOT NULL THEN
+    -- Reject conflicting replay parameters
+    IF v_existing_amount != p_amount_paid OR v_existing_currency != p_currency THEN
+      RAISE EXCEPTION 'Invoice replay conflict: conflicting amount or currency for invoice %', p_stripe_invoice_id;
+    END IF;
+
+    -- Return existing invoice ID without modifying previously completed allocations or snapshots
+    RETURN v_invoice_id;
   END IF;
 
-  -- B. Retrieve user profile charity split settings
+  -- B. Record new invoice
+  INSERT INTO public.invoices (
+    user_id,
+    stripe_invoice_id,
+    amount_paid,
+    currency,
+    plan_type,
+    paid_at
+  ) VALUES (
+    p_user_id,
+    p_stripe_invoice_id,
+    p_amount_paid,
+    p_currency,
+    p_plan_type,
+    p_paid_at
+  ) RETURNING id INTO v_invoice_id;
+
+  -- C. Retrieve user profile charity split settings at time of payment
   SELECT selected_charity_id, charity_percentage INTO v_profile
   FROM public.profiles
   WHERE id = p_user_id;
@@ -68,7 +79,7 @@ BEGIN
   v_start_year := EXTRACT(YEAR FROM p_period_start);
   v_start_month := EXTRACT(MONTH FROM p_period_start);
 
-  -- C. Upsert funding allocations atomically
+  -- D. Upsert funding allocations atomically
   IF p_plan_type = 'annual' THEN
     v_monthly_share := FLOOR(p_amount_paid / 12);
     v_remainder := p_amount_paid - (v_monthly_share * 12);
@@ -78,7 +89,6 @@ BEGIN
       v_cov_year := EXTRACT(YEAR FROM v_cov_date);
       v_cov_month := EXTRACT(MONTH FROM v_cov_date);
 
-      -- Freeze check: skip if allocation already linked to a draw
       SELECT draw_id INTO v_existing_draw_id
       FROM public.funding_allocations
       WHERE user_id = p_user_id
@@ -121,7 +131,7 @@ BEGIN
         prize_share_minor = EXCLUDED.prize_share_minor,
         charity_share_minor = EXCLUDED.charity_share_minor,
         platform_share_minor = EXCLUDED.platform_share_minor
-      WHERE public.funding_allocations.draw_id IS NULL; -- Coordinated lock freeze
+      WHERE public.funding_allocations.draw_id IS NULL;
     END LOOP;
   ELSE
     -- Monthly Plan
@@ -170,6 +180,12 @@ BEGIN
   RETURN v_invoice_id;
 END;
 $$;
+
+-- Security Hardening: Revoke RPC execution from untrusted roles; restrict strictly to service_role
+REVOKE EXECUTE ON FUNCTION public.process_invoice_funding_allocation(UUID, TEXT, INTEGER, TEXT, TEXT, TIMESTAMPTZ, TIMESTAMPTZ) FROM PUBLIC;
+REVOKE EXECUTE ON FUNCTION public.process_invoice_funding_allocation(UUID, TEXT, INTEGER, TEXT, TEXT, TIMESTAMPTZ, TIMESTAMPTZ) FROM anon;
+REVOKE EXECUTE ON FUNCTION public.process_invoice_funding_allocation(UUID, TEXT, INTEGER, TEXT, TEXT, TIMESTAMPTZ, TIMESTAMPTZ) FROM authenticated;
+GRANT EXECUTE ON FUNCTION public.process_invoice_funding_allocation(UUID, TEXT, INTEGER, TEXT, TEXT, TIMESTAMPTZ, TIMESTAMPTZ) TO service_role;
 
 -- 2. UPDATE PUBLISH_MONTHLY_DRAW PROCEDURE WITH ROLLOVER PRESERVATION
 -- Carries forward the latest unconsumed published rollover across skipped months and enforces strict chronological order.
@@ -301,7 +317,7 @@ BEGIN
     v_t5_payout := FLOOR(v_t5_pool / v_5_winners);
     v_t5_reserve := v_t5_pool - (v_t5_payout * v_5_winners);
   ELSE
-    v_t5_rollover := v_t5_pool; // Rollover preserved if zero 5-match winners
+    v_t5_rollover := v_t5_pool; -- Rollover preserved if zero 5-match winners
   END IF;
 
   IF v_4_winners > 0 THEN

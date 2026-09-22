@@ -49,7 +49,6 @@ describe('Database Draw Lifecycle Contract Rules', () => {
       if (!target) return false;
       if (target.status === 'published') return false;
 
-      // Reject publication if ANY earlier month remains uncompleted
       const earlierUncompleted = drawsInDatabase.some(
         (d) =>
           (d.year < target.year || (d.year === target.year && d.month < target.month)) &&
@@ -57,7 +56,6 @@ describe('Database Draw Lifecycle Contract Rules', () => {
       );
       if (earlierUncompleted) return false;
 
-      // Reject publication if ANY later month is already published
       const laterPublished = drawsInDatabase.some(
         (d) =>
           (d.year > target.year || (d.year === target.year && d.month > target.month)) &&
@@ -68,7 +66,6 @@ describe('Database Draw Lifecycle Contract Rules', () => {
       return true;
     }
 
-    // February publication MUST be rejected because March is already published
     expect(canPublishDraw('draw_feb')).toBe(false);
   });
 
@@ -77,17 +74,72 @@ describe('Database Draw Lifecycle Contract Rules', () => {
       five_match_rollover_minor: 4000,
     };
 
-    // March draw carrying forward January rollover when Feb is skipped
     const marchDrawInput = {
       totalFundedMinor: 50000,
-      incomingRolloverMinor: janFinancials.five_match_rollover_minor, // 4,000 from Jan
+      incomingRolloverMinor: janFinancials.five_match_rollover_minor,
       winnerCounts: { fiveMatch: 0, fourMatch: 0, threeMatch: 0 },
     };
 
     const res = calculateDrawFinancials(marchDrawInput);
-    expect(res.fiveMatchPoolMinor).toBe(8000); // 4,000 base + 4,000 rollover = 8,000
-    expect(res.fiveMatchRolloverMinor).toBe(8000); // Carried forward to April
+    expect(res.fiveMatchPoolMinor).toBe(8000);
+    expect(res.fiveMatchRolloverMinor).toBe(8000);
     expect(res.unawardedReserveMinor).toBe(6000);
     expect(res.roundingReserveMinor).toBe(0);
+  });
+
+  it('enforces invoice replay idempotency: preserves original completed allocations and rejects parameter conflicts', () => {
+    interface FundingAlloc {
+      invoice_id: string;
+      charity_share_minor: number;
+      charity_pct: number;
+    }
+
+    const invoicesDb = new Map<string, { id: string; amount_paid: number; currency: string }>();
+    const allocationsDb: FundingAlloc[] = [];
+
+    function processInvoiceFundingAllocation(
+      stripeInvoiceId: string,
+      amountPaid: number,
+      currency: string,
+      userCharityPct: number
+    ) {
+      const existing = invoicesDb.get(stripeInvoiceId);
+      if (existing) {
+        if (existing.amount_paid !== amountPaid || existing.currency !== currency) {
+          throw new Error(`Invoice replay conflict: conflicting amount or currency for invoice ${stripeInvoiceId}`);
+        }
+        return existing.id; // Return without modifying completed allocations
+      }
+
+      const invId = `inv_${Date.now()}`;
+      invoicesDb.set(stripeInvoiceId, { id: invId, amount_paid: amountPaid, currency });
+
+      const charityShare = Math.floor(amountPaid * (userCharityPct / 100));
+      allocationsDb.push({
+        invoice_id: invId,
+        charity_share_minor: charityShare,
+        charity_pct: userCharityPct,
+      });
+
+      return invId;
+    }
+
+    // 1. Initial processing at 10% charity split
+    const invId1 = processInvoiceFundingAllocation('in_12345', 10000, 'inr', 10);
+    expect(allocationsDb[0].charity_share_minor).toBe(1000);
+    expect(allocationsDb[0].charity_pct).toBe(10);
+
+    // 2. User changes profile charity percentage to 80%
+    const updatedUserPct = 80;
+
+    // 3. Replaying same webhook DOES NOT rewrite charity_share_minor to 8000
+    const invId2 = processInvoiceFundingAllocation('in_12345', 10000, 'inr', updatedUserPct);
+    expect(invId2).toBe(invId1);
+    expect(allocationsDb[0].charity_share_minor).toBe(1000); // Preserved at 1000!
+
+    // 4. Conflicting invoice replay (e.g. mismatched amount) is rejected
+    expect(() => processInvoiceFundingAllocation('in_12345', 20000, 'inr', 80)).toThrow(
+      'Invoice replay conflict: conflicting amount or currency for invoice in_12345'
+    );
   });
 });

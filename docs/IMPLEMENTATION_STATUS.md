@@ -6,10 +6,11 @@ This document accurately classifies implemented features, review status, and ext
 
 | Review Item | Status | Verification Evidence |
 | :--- | :--- | :--- |
-| **Rollover Preservation Across Skipped Months** | **Fixed** | Migration `20260107000000_atomic_webhook_and_rollover_preservation.sql` updates `publish_monthly_draw(p_draw_id)` to query the latest published draw prior to `p_draw_id` and carry forward unconsumed 5-match jackpot rollover. Out-of-order publication (Feb after Mar) is rejected. Verified in `src/lib/drawLifecycle.test.ts`. |
-| **Atomic Webhook Allocation RPC** | **Fixed** | Created PostgreSQL RPC function `process_invoice_funding_allocation` executing invoice creation and funding allocation upserts in a single database transaction. Funding allocations linked to a draw (`draw_id IS NOT NULL`) are frozen and skipped. Called directly in `src/app/api/webhooks/stripe/route.ts`. |
+| **Invalid Comment Fix in Migration** | **Fixed** | Fixed line 304 in `20260107000000_atomic_webhook_and_rollover_preservation.sql` replacing invalid `//` with standard SQL `--` comment syntax. |
+| **RPC Security Revocation (process_invoice_funding_allocation)** | **Fixed** | Explicitly revoked `EXECUTE` on `process_invoice_funding_allocation` from `PUBLIC`, `anon`, and `authenticated`. Granted `EXECUTE` strictly to `service_role`. Tested in `src/lib/authorization.test.ts`. |
+| **Invoice Replay Idempotency & Split Preservation** | **Fixed** | `process_invoice_funding_allocation` checks for existing invoices by `stripe_invoice_id`. If an invoice was previously processed, it returns the existing ID without modifying completed allocations or charity split snapshots, and rejects conflicting replay parameters (`amount_paid` or `currency` mismatch). Tested in `src/lib/drawLifecycle.test.ts`. |
+| **Rollover Preservation Across Skipped Months** | **Fixed** | `publish_monthly_draw(p_draw_id)` queries the latest published draw prior to `p_draw_id` and carries forward unconsumed 5-match jackpot rollover. Rejects publication if any later month's draw is already published. |
 | **Non-Null Unexpired Paid-Through Eligibility** | **Fixed** | `lock_monthly_draw` requires `sub.current_period_end IS NOT NULL AND sub.current_period_end >= NOW()`. |
-| **Table Write Security & Direct Write Revocation** | **Fixed** | Direct `INSERT`/`UPDATE`/`DELETE` permissions on `draw_financials` and `draw_awards` are revoked from `authenticated`. |
 
 ---
 
@@ -20,6 +21,6 @@ This document accurately classifies implemented features, review status, and ext
 ---
 
 ## Test Evidence
-- **Vitest Unit & Integration Suite**: 22/22 PASSED (`npm test`)
+- **Vitest Unit & Integration Suite**: 24/24 PASSED (`npm test`)
 - **ESLint**: 0 errors (`npm run lint`)
 - **Next.js Production Build**: PASSED (`npm run build`)

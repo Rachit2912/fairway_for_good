@@ -2,16 +2,15 @@
 
 This document accurately classifies implemented features, review status, and external integration blockers.
 
-## Review Items Resolution Summary
+## Outstanding Review Resolution Summary
 
 | Review Item | Status | Verification Evidence |
 | :--- | :--- | :--- |
-| **Unsafe Score RPC Cleanup** | **Fixed** | Migration `20260103000000_cleanup_legacy_score_rpc.sql` drops 3-parameter function `save_user_score(UUID, DATE, INTEGER)`. Only 2-parameter function checking `auth.uid()` remains. Direct table `INSERT`/`UPDATE` revoked from `authenticated`. |
-| **End-to-End Billing Flow** | **Fixed** | Pricing buttons invoke `createCheckoutSessionAction` in `src/app/actions/billingActions.ts`. Validates plan choices, maps to `NEXT_PUBLIC_STRIPE_MONTHLY_PRICE_ID` / `NEXT_PUBLIC_STRIPE_ANNUAL_PRICE_ID`, and prevents duplicate active subscriptions. Customer portal linked in member header and billing page. |
-| **Draw Engine & Math Conservation** | **Fixed** | `calculateDrawFinancials` in `src/lib/drawEngine.ts` corrected so unawarded 4/3-tier funds are excluded from `roundingReserveMinor`. Conservation regression test (`totalFundedMinor=50000`, 0 winners => base pool 10000, rollover 4000, unawarded 6000, rounding reserve 0) passes in `src/lib/drawEngine.test.ts`. |
-| **Transactional Draw Lifecycle** | **Fixed** | Database procedures `lock_monthly_draw`, `generate_monthly_draw`, and `publish_monthly_draw` freeze score snapshots, generate winning numbers without rerolls, and publish results atomically. Connected to `AdminDrawDetailClient` in `/admin/draws/[id]`. |
-| **Connected Member & Admin Workflows** | **Fixed** | Auth forms, Score CRUD (`MemberScoresClient`), Charity preferences (`MemberCharityClient`), Winner proof upload (`MemberWinningsClient`), and Admin Winner Review & Payout (`AdminWinnersClient`) are fully wired to Server Actions and Supabase database calls. |
-| **Database RLS Authorization Tests** | **Fixed** | Expanded `src/lib/authorization.test.ts` testing direct table write restrictions, winner proof permissions, and role elevation blocks. |
+| **Real Database Draw UUIDs & UI Integration** | **Fixed** | Replaced hardcoded links with real UUID database records in `/draws`, `/draws/[id]`, `/admin/draws`, and `/admin/draws/[id]`. Added `adminCreateDrawAction` creating draft draws. |
+| **Server-Side Cryptographic Generation** | **Fixed** | `adminGenerateDrawAction` in `src/app/actions/adminActions.ts` generates 5 numbers server-side using `crypto.randomInt()`, supporting uniform random and score-frequency weighted modes. Rejects client numbers. |
+| **Paid-Through Subscription Eligibility** | **Fixed** | Migration `20260104000000_draw_lifecycle_awards.sql` links funding allocations from ALL active paid-through subscribers to draw pool, while restricting entry creation to members with 5 scores. |
+| **Atomic Award Calculation & Publication** | **Fixed** | Procedure `publish_monthly_draw` evaluates multiset score matches against official numbers, calculates 40/35/25 tier payouts/reserves/rollover, inserts `draw_financials` and `draw_awards` records, and updates status to `published` atomically. |
+| **Draw Lifecycle Test Evidence** | **Fixed** | `src/lib/drawLifecycle.test.ts` validates state transitions (`draft -> locked -> generated -> published`), reroll prevention, and 10-subscriber prize pool calculation. |
 
 ---
 
@@ -22,5 +21,5 @@ This document accurately classifies implemented features, review status, and ext
 ---
 
 ## Test Evidence
-- **Vitest Unit Suite**: 16/16 PASSED (`npm test`)
+- **Vitest Unit Suite**: 20/20 PASSED (`npm test`)
 - **Next.js Production Build**: PASSED (`npm run build`)

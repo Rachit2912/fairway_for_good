@@ -3,6 +3,130 @@
 import { createClient } from '@/lib/supabase/server';
 import { createAdminClient } from '@/lib/supabase/admin';
 import { revalidatePath } from 'next/cache';
+import crypto from 'crypto';
+
+export async function adminCreateDrawAction(year: number, month: number, mode: 'random' | 'weighted' = 'random') {
+  const supabase = await createClient();
+  const { data, error } = await supabase
+    .from('draws')
+    .insert({
+      year,
+      month,
+      mode,
+      status: 'draft',
+    })
+    .select()
+    .single();
+
+  if (error) {
+    return { error: error.message };
+  }
+
+  revalidatePath('/admin/draws');
+  return { success: true, data };
+}
+
+export async function adminGenerateDrawAction(drawId: string) {
+  const supabase = await createClient();
+  const { data: draw, error: drawErr } = await supabase
+    .from('draws')
+    .select('*')
+    .eq('id', drawId)
+    .single();
+
+  if (drawErr || !draw) {
+    return { error: 'Draw record not found' };
+  }
+
+  if (draw.status !== 'locked') {
+    return { error: 'Draw must be locked before generating official numbers' };
+  }
+
+  let numbers: number[] = [];
+
+  if (draw.mode === 'weighted') {
+    // Score-frequency weighted mode
+    const { data: entries } = await supabase
+      .from('draw_entries')
+      .select('score_values')
+      .eq('draw_id', drawId);
+
+    const weights = new Map<number, number>();
+    for (let i = 1; i <= 45; i++) {
+      weights.set(i, 1); // baseline weight = 1
+    }
+
+    if (entries) {
+      for (const entry of entries) {
+        for (const num of entry.score_values) {
+          if (num >= 1 && num <= 45) {
+            weights.set(num, (weights.get(num) || 1) + 1);
+          }
+        }
+      }
+    }
+
+    const pool: number[] = [];
+    for (const [val, w] of weights.entries()) {
+      for (let k = 0; k < w; k++) {
+        pool.push(val);
+      }
+    }
+
+    for (let i = 0; i < 5; i++) {
+      const idx = crypto.randomInt(0, pool.length);
+      numbers.push(pool[idx]);
+    }
+  } else {
+    // Uniform random mode with cryptographically secure randomInt
+    for (let i = 0; i < 5; i++) {
+      numbers.push(crypto.randomInt(1, 46));
+    }
+  }
+
+  const { data: updatedDraw, error: genErr } = await supabase.rpc('generate_monthly_draw', {
+    p_draw_id: drawId,
+    p_winning_numbers: numbers,
+  });
+
+  if (genErr) {
+    return { error: genErr.message };
+  }
+
+  revalidatePath('/admin/draws');
+  revalidatePath(`/admin/draws/${drawId}`);
+  return { success: true, data: updatedDraw, numbers };
+}
+
+export async function adminPublishDrawAction(drawId: string) {
+  const supabase = await createClient();
+  const { data, error } = await supabase.rpc('publish_monthly_draw', {
+    p_draw_id: drawId,
+  });
+
+  if (error) {
+    return { error: error.message };
+  }
+
+  revalidatePath('/admin/draws');
+  revalidatePath(`/admin/draws/${drawId}`);
+  revalidatePath('/draws');
+  revalidatePath(`/draws/${drawId}`);
+  return { success: true, data };
+}
+
+export async function adminLockDrawAction(drawId: string) {
+  const supabase = await createClient();
+  const { data, error } = await supabase.rpc('lock_monthly_draw', { p_draw_id: drawId });
+
+  if (error) {
+    return { error: error.message };
+  }
+
+  revalidatePath('/admin/draws');
+  revalidatePath(`/admin/draws/${drawId}`);
+  return { success: true, data };
+}
 
 export async function uploadWinnerProofAction(awardId: string, formData: FormData) {
   const file = formData.get('proof_file') as File;
@@ -28,7 +152,6 @@ export async function uploadWinnerProofAction(awardId: string, formData: FormDat
     return { error: 'Authentication required' };
   }
 
-  // Verify winner owns this award
   const { data: award } = await supabase
     .from('draw_awards')
     .select('id, user_id')
@@ -58,7 +181,6 @@ export async function uploadWinnerProofAction(awardId: string, formData: FormDat
     return { error: 'Failed to upload proof image to storage' };
   }
 
-  // Insert or update winner submission record with pending status
   const { error: subErr } = await supabase.from('winner_submissions').upsert(
     {
       award_id: awardId,
@@ -119,7 +241,6 @@ export async function adminProcessPayoutAction(awardId: string, referenceNote?: 
     return { error: 'Authentication required' };
   }
 
-  // Verify submission is approved before payout
   const { data: sub } = await supabase
     .from('winner_submissions')
     .select('review_status')
@@ -147,50 +268,4 @@ export async function adminProcessPayoutAction(awardId: string, referenceNote?: 
 
   revalidatePath('/admin/winners');
   return { success: true };
-}
-
-export async function adminLockDrawAction(drawId: string) {
-  const supabase = await createClient();
-  const { data, error } = await supabase.rpc('lock_monthly_draw', { p_draw_id: drawId });
-
-  if (error) {
-    return { error: error.message };
-  }
-
-  revalidatePath('/admin/draws');
-  revalidatePath(`/admin/draws/${drawId}`);
-  return { success: true, data };
-}
-
-export async function adminGenerateDrawAction(drawId: string, winningNumbers: number[]) {
-  const supabase = await createClient();
-  const { data, error } = await supabase.rpc('generate_monthly_draw', {
-    p_draw_id: drawId,
-    p_winning_numbers: winningNumbers,
-  });
-
-  if (error) {
-    return { error: error.message };
-  }
-
-  revalidatePath('/admin/draws');
-  revalidatePath(`/admin/draws/${drawId}`);
-  return { success: true, data };
-}
-
-export async function adminPublishDrawAction(drawId: string, financials: any) {
-  const supabase = await createClient();
-  const { data, error } = await supabase.rpc('publish_monthly_draw', {
-    p_draw_id: drawId,
-    p_financials: financials,
-  });
-
-  if (error) {
-    return { error: error.message };
-  }
-
-  revalidatePath('/admin/draws');
-  revalidatePath(`/admin/draws/${drawId}`);
-  revalidatePath('/draws');
-  return { success: true, data };
 }

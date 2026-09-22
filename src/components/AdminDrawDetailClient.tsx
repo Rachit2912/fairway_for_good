@@ -42,14 +42,12 @@ export function AdminDrawDetailClient({
     setError(null);
     setSuccess(null);
 
-    // Cryptographically secure numbers sample or weighted draw generator
-    const numbers = Array.from({ length: 5 }, () => Math.floor(Math.random() * 45) + 1);
-    const res = await adminGenerateDrawAction(draw.id, numbers);
+    const res = await adminGenerateDrawAction(draw.id);
 
     if (res?.error) {
       setError(res.error);
     } else {
-      setSuccess(`Official draw numbers generated: ${numbers.join(', ')}`);
+      setSuccess(`Official draw numbers generated server-side: ${res.numbers?.join(', ')}`);
     }
     setLoading(false);
   }
@@ -59,11 +57,11 @@ export function AdminDrawDetailClient({
     setError(null);
     setSuccess(null);
 
-    const res = await adminPublishDrawAction(draw.id, { published_by: 'admin' });
+    const res = await adminPublishDrawAction(draw.id);
     if (res?.error) {
       setError(res.error);
     } else {
-      setSuccess('Draw published! Official numbers released to public results.');
+      setSuccess('Draw published! Official numbers and calculated awards released to public results.');
     }
     setLoading(false);
   }
@@ -89,9 +87,10 @@ export function AdminDrawDetailClient({
           <h2 className="text-2xl font-serif font-bold text-[#0f4c46]">
             Draw {draw.month}/{draw.year} Control
           </h2>
+          <p className="text-xs text-[#1a1d20]/70">Mode: {draw.mode}</p>
           {draw.official_numbers && (
             <p className="text-sm font-semibold text-[#0f4c46]">
-              Official Numbers: {draw.official_numbers.join(', ')}
+              Official Winning Numbers: {draw.official_numbers.join(', ')}
             </p>
           )}
         </div>
@@ -112,7 +111,7 @@ export function AdminDrawDetailClient({
             className="p-4 rounded-xl border border-[#e2ded4] bg-[#f4f1ea] text-left hover:border-[#0f4c46] transition-colors disabled:opacity-50"
           >
             <span className="text-xs font-bold uppercase text-[#0f4c46] block">Step 2: Generate</span>
-            <span className="text-sm font-semibold text-[#1a1d20] block mt-1">Generate Numbers</span>
+            <span className="text-sm font-semibold text-[#1a1d20] block mt-1">Generate Numbers Server-Side</span>
           </button>
 
           <button
@@ -121,7 +120,7 @@ export function AdminDrawDetailClient({
             className="p-4 rounded-xl border border-[#0f4c46] bg-[#0f4c46] text-[#fdfbf7] text-left hover:bg-[#0a3834] transition-colors disabled:opacity-50"
           >
             <span className="text-xs font-bold uppercase text-[#84a98c] block">Step 3: Publish</span>
-            <span className="text-sm font-semibold block mt-1">Publish Official Results</span>
+            <span className="text-sm font-semibold block mt-1">Publish & Calculate Awards</span>
           </button>
         </div>
       </div>

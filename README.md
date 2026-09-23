@@ -26,6 +26,7 @@ Fairway for Good is a community subscription web application combining golf Stab
    - `supabase/migrations/20260108000000_fk_and_payout_security.sql`
    - `supabase/migrations/20260109000000_grant_generate_monthly_draw_service_role.sql`
    - `supabase/migrations/20260110000000_hardened_draw_lifecycle_and_subscription_security.sql`
+   - `supabase/migrations/20260111000000_admin_role_rpc_and_audit.sql`
 3. Create a private storage bucket named `winner-proofs` in Supabase Storage. Ensure public access is disabled.
 4. In Supabase Authentication settings, add your deployment domain URL to Site URL and Redirect URLs.
 
@@ -67,7 +68,7 @@ npm run seed
 
 ### 5. Running Tests & Production Build
 ```bash
-# Run Vitest test suite (28 passing unit/integration tests)
+# Run Vitest test suite (32 passing unit/integration tests)
 npm test
 
 # Run ESLint check

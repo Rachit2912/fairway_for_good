@@ -17,6 +17,7 @@ This document accurately classifies implemented features, PRD scope compliance, 
 | **Draft & Locked Draw Simulation Logic** | **Implemented** | `adminSimulateDrawAction` groups scores by `round_date DESC`, enforcing active subscription and funded coverage rules for draft draws, and preserving frozen entries for locked draws. |
 | **Voluntary Donation Checkout Modal & Disclosures** | **Implemented** | `DonationModal` accepts positive integer minor-unit amounts in INR, displays clear webhook settlement disclosures and draw eligibility disclaimers, and redirects via `createDonationCheckoutSessionAction`. |
 | **Admin User & Charity Management UI Workflows** | **Implemented** | Admin suite features `/admin/users/[id]` for profile/score editing and `AdminCharitiesClient` for non-profit and event creation, editing, and status toggles. |
+| **Admin Profile Updates & Score Management Procedures** | **Implemented** | `adminUpdateUserProfileAndScoresAction` uses service-role client with `.select()` verification. `adminSaveUserScoreAction` invokes `admin_save_user_score` RPC (`20260112000000`), enforcing atomic advisory locks and top-5 retention. |
 
 ---
 
@@ -28,6 +29,6 @@ This document accurately classifies implemented features, PRD scope compliance, 
 ---
 
 ## Verification Evidence
-- **Vitest Unit & Integration Suite**: 32/32 PASSED (`npm test`)
+- **Vitest Unit & Integration Suite**: 34/34 PASSED (`npm test`)
 - **ESLint**: 0 errors (`npm run lint`)
 - **Next.js Production Build**: PASSED (`npm run build`)

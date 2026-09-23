@@ -1,5 +1,6 @@
 import { createClient } from '@/lib/supabase/server';
 import { AdminHeader } from '@/components/AdminHeader';
+import { CharityStatusToggle } from '@/components/CharityStatusToggle';
 
 export default async function AdminCharitiesPage() {
   const supabase = await createClient();
@@ -34,24 +35,7 @@ export default async function AdminCharitiesPage() {
               <tbody className="divide-y divide-[#e2ded4]">
                 {charities && charities.length > 0 ? (
                   charities.map((c) => (
-                    <tr key={c.id}>
-                      <td className="px-4 py-3 font-semibold">{c.name}</td>
-                      <td className="px-4 py-3 text-xs uppercase text-[#84a98c] font-semibold">{c.category}</td>
-                      <td className="px-4 py-3">
-                        {c.featured ? (
-                          <span className="text-xs bg-emerald-100 text-emerald-800 font-semibold px-2 py-0.5 rounded">
-                            Featured
-                          </span>
-                        ) : (
-                          <span className="text-xs text-gray-400">Standard</span>
-                        )}
-                      </td>
-                      <td className="px-4 py-3">
-                        <span className="text-xs bg-emerald-100 text-emerald-800 font-semibold px-2 py-0.5 rounded uppercase">
-                          {c.active ? 'Active' : 'Inactive'}
-                        </span>
-                      </td>
-                    </tr>
+                    <CharityStatusToggle key={c.id} charity={c} />
                   ))
                 ) : (
                   <tr>

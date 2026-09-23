@@ -7,16 +7,11 @@ import crypto from 'crypto';
 
 export async function adminCreateDrawAction(year: number, month: number, mode: 'random' | 'weighted' = 'random') {
   const supabase = await createClient();
-  const { data, error } = await supabase
-    .from('draws')
-    .insert({
-      year,
-      month,
-      mode,
-      status: 'draft',
-    })
-    .select()
-    .single();
+  const { data, error } = await supabase.rpc('create_draft_draw', {
+    p_year: year,
+    p_month: month,
+    p_mode: mode,
+  });
 
   if (error) {
     return { error: error.message };
@@ -28,6 +23,24 @@ export async function adminCreateDrawAction(year: number, month: number, mode: '
 
 export async function adminSimulateDrawAction(drawId: string) {
   const supabase = await createClient();
+  const {
+    data: { user },
+  } = await supabase.auth.getUser();
+
+  if (!user) {
+    return { error: 'Authentication required' };
+  }
+
+  const { data: roleData } = await supabase
+    .from('user_roles')
+    .select('role')
+    .eq('user_id', user.id)
+    .maybeSingle();
+
+  if (!roleData || roleData.role !== 'admin') {
+    return { error: 'Admin privileges required' };
+  }
+
   const { data: draw, error: drawErr } = await supabase
     .from('draws')
     .select('*')
@@ -38,34 +51,83 @@ export async function adminSimulateDrawAction(drawId: string) {
     return { error: 'Draw record not found' };
   }
 
-  const numbers = Array.from({ length: 5 }, () => crypto.randomInt(1, 46));
+  let entriesToSimulate: { user_id: string; score_values: number[] }[] = [];
 
-  const { data: entries } = await supabase
+  const { data: existingEntries } = await supabase
     .from('draw_entries')
     .select('user_id, score_values')
     .eq('draw_id', drawId);
+
+  if (existingEntries && existingEntries.length > 0) {
+    entriesToSimulate = existingEntries;
+  } else {
+    // If draw is in draft status, derive simulated entries from active subscribers
+    const { data: activeSubs } = await supabase
+      .from('subscriptions')
+      .select('user_id')
+      .in('status', ['active', 'trialing']);
+
+    if (activeSubs && activeSubs.length > 0) {
+      const userIds = activeSubs.map((s) => s.user_id);
+      const { data: activeScores } = await supabase
+        .from('scores')
+        .select('user_id, score_values')
+        .in('user_id', userIds);
+
+      if (activeScores) {
+        entriesToSimulate = activeScores;
+      }
+    }
+  }
+
+  const numbers: number[] = [];
+
+  if (draw.mode === 'weighted') {
+    const weights = new Map<number, number>();
+    for (let i = 1; i <= 45; i++) weights.set(i, 1);
+
+    for (const entry of entriesToSimulate) {
+      for (const num of entry.score_values) {
+        if (num >= 1 && num <= 45) {
+          weights.set(num, (weights.get(num) || 1) + 1);
+        }
+      }
+    }
+
+    const pool: number[] = [];
+    for (const [val, w] of weights.entries()) {
+      for (let k = 0; k < w; k++) pool.push(val);
+    }
+
+    for (let i = 0; i < 5; i++) {
+      const idx = crypto.randomInt(0, pool.length);
+      numbers.push(pool[idx]);
+    }
+  } else {
+    for (let i = 0; i < 5; i++) {
+      numbers.push(crypto.randomInt(1, 46));
+    }
+  }
 
   let match5 = 0;
   let match4 = 0;
   let match3 = 0;
 
-  if (entries) {
-    for (const entry of entries) {
-      const eCounts = new Map<number, number>();
-      const dCounts = new Map<number, number>();
+  for (const entry of entriesToSimulate) {
+    const eCounts = new Map<number, number>();
+    const dCounts = new Map<number, number>();
 
-      for (const v of entry.score_values) eCounts.set(v, (eCounts.get(v) || 0) + 1);
-      for (const v of numbers) dCounts.set(v, (dCounts.get(v) || 0) + 1);
+    for (const v of entry.score_values) eCounts.set(v, (eCounts.get(v) || 0) + 1);
+    for (const v of numbers) dCounts.set(v, (dCounts.get(v) || 0) + 1);
 
-      let m = 0;
-      for (const [val, count] of eCounts.entries()) {
-        m += Math.min(count, dCounts.get(val) || 0);
-      }
-
-      if (m === 5) match5++;
-      else if (m === 4) match4++;
-      else if (m === 3) match3++;
+    let m = 0;
+    for (const [val, count] of eCounts.entries()) {
+      m += Math.min(count, dCounts.get(val) || 0);
     }
+
+    if (m === 5) match5++;
+    else if (m === 4) match4++;
+    else if (m === 3) match3++;
   }
 
   return {
@@ -351,6 +413,25 @@ export async function adminProcessPayoutAction(awardId: string, referenceNote?: 
 }
 
 export async function adminCreateCharityAction(formData: FormData) {
+  const supabase = await createClient();
+  const {
+    data: { user },
+  } = await supabase.auth.getUser();
+
+  if (!user) {
+    return { error: 'Authentication required' };
+  }
+
+  const { data: roleData } = await supabase
+    .from('user_roles')
+    .select('role')
+    .eq('user_id', user.id)
+    .maybeSingle();
+
+  if (!roleData || roleData.role !== 'admin') {
+    return { error: 'Admin privileges required' };
+  }
+
   const name = formData.get('name') as string;
   const slug = formData.get('slug') as string;
   const tagline = formData.get('tagline') as string;
@@ -358,7 +439,6 @@ export async function adminCreateCharityAction(formData: FormData) {
   const category = formData.get('category') as string;
   const featured = formData.get('featured') === 'true';
 
-  const supabase = await createClient();
   const { data, error } = await supabase
     .from('charities')
     .insert({
@@ -383,13 +463,31 @@ export async function adminCreateCharityAction(formData: FormData) {
 }
 
 export async function adminCreateCharityEventAction(formData: FormData) {
+  const supabase = await createClient();
+  const {
+    data: { user },
+  } = await supabase.auth.getUser();
+
+  if (!user) {
+    return { error: 'Authentication required' };
+  }
+
+  const { data: roleData } = await supabase
+    .from('user_roles')
+    .select('role')
+    .eq('user_id', user.id)
+    .maybeSingle();
+
+  if (!roleData || roleData.role !== 'admin') {
+    return { error: 'Admin privileges required' };
+  }
+
   const charityId = formData.get('charity_id') as string;
   const title = formData.get('title') as string;
   const description = formData.get('description') as string;
   const eventDate = formData.get('event_date') as string;
   const location = formData.get('location') as string;
 
-  const supabase = await createClient();
   const { data, error } = await supabase
     .from('charity_events')
     .insert({
@@ -410,7 +508,106 @@ export async function adminCreateCharityEventAction(formData: FormData) {
   return { success: true, data };
 }
 
+export async function adminUpdateCharityStatusAction(charityId: string, active: boolean, featured?: boolean) {
+  const supabase = await createClient();
+  const {
+    data: { user },
+  } = await supabase.auth.getUser();
+
+  if (!user) {
+    return { error: 'Authentication required' };
+  }
+
+  const { data: roleData } = await supabase
+    .from('user_roles')
+    .select('role')
+    .eq('user_id', user.id)
+    .maybeSingle();
+
+  if (!roleData || roleData.role !== 'admin') {
+    return { error: 'Admin privileges required' };
+  }
+
+  const updatePayload: { active: boolean; updated_at: string; featured?: boolean } = {
+    active,
+    updated_at: new Date().toISOString(),
+  };
+
+  if (typeof featured === 'boolean') {
+    updatePayload.featured = featured;
+  }
+
+  const { error } = await supabase
+    .from('charities')
+    .update(updatePayload)
+    .eq('id', charityId);
+
+  if (error) {
+    return { error: error.message };
+  }
+
+  revalidatePath('/admin/charities');
+  revalidatePath('/charities');
+  return { success: true };
+}
+
+export async function adminUpdateUserRoleAction(targetUserId: string, newRole: 'member' | 'admin') {
+  const supabase = await createClient();
+  const {
+    data: { user },
+  } = await supabase.auth.getUser();
+
+  if (!user) {
+    return { error: 'Authentication required' };
+  }
+
+  const { data: roleData } = await supabase
+    .from('user_roles')
+    .select('role')
+    .eq('user_id', user.id)
+    .maybeSingle();
+
+  if (!roleData || roleData.role !== 'admin') {
+    return { error: 'Admin privileges required' };
+  }
+
+  const { error } = await supabase.from('user_roles').upsert(
+    {
+      user_id: targetUserId,
+      role: newRole,
+      assigned_at: new Date().toISOString(),
+    },
+    { onConflict: 'user_id' }
+  );
+
+  if (error) {
+    return { error: error.message };
+  }
+
+  revalidatePath('/admin/users');
+  return { success: true };
+}
+
 export async function adminReconcileSubscriptionAction(userId: string) {
+  const supabase = await createClient();
+  const {
+    data: { user },
+  } = await supabase.auth.getUser();
+
+  if (!user) {
+    return { error: 'Authentication required' };
+  }
+
+  const { data: roleData } = await supabase
+    .from('user_roles')
+    .select('role')
+    .eq('user_id', user.id)
+    .maybeSingle();
+
+  if (!roleData || roleData.role !== 'admin') {
+    return { error: 'Admin privileges required' };
+  }
+
   const adminSupabase = createAdminClient();
   const { data: sub } = await adminSupabase
     .from('subscriptions')
@@ -422,15 +619,27 @@ export async function adminReconcileSubscriptionAction(userId: string) {
     return { error: 'No Stripe subscription ID found for user' };
   }
 
-  const { error } = await adminSupabase
-    .from('subscriptions')
-    .update({
-      last_reconciled_at: new Date().toISOString(),
-    })
-    .eq('user_id', userId);
+  try {
+    const { stripe } = await import('@/lib/stripe/client');
+    const stripeSub = await stripe.subscriptions.retrieve(sub.stripe_subscription_id);
 
-  if (error) {
-    return { error: error.message };
+    const { error } = await adminSupabase
+      .from('subscriptions')
+      .update({
+        status: stripeSub.status,
+        current_period_end: new Date(stripeSub.current_period_end * 1000).toISOString(),
+        cancel_at_period_end: stripeSub.cancel_at_period_end,
+        last_reconciled_at: new Date().toISOString(),
+        updated_at: new Date().toISOString(),
+      })
+      .eq('user_id', userId);
+
+    if (error) {
+      return { error: error.message };
+    }
+  } catch (err: unknown) {
+    const message = err instanceof Error ? err.message : 'Failed to query Stripe subscription';
+    return { error: `Stripe reconciliation failed: ${message}` };
   }
 
   revalidatePath('/admin/users');

@@ -1,6 +1,7 @@
 'use client';
 
 import { useState } from 'react';
+import Link from 'next/link';
 import { adminUpdateUserRoleAction, adminReconcileSubscriptionAction } from '@/app/actions/adminActions';
 
 interface Profile {
@@ -94,6 +95,12 @@ export function UserRoleManager({ profile }: { profile: Profile }) {
         >
           Reconcile
         </button>
+        <Link
+          href={`/admin/users/${profile.id}`}
+          className="inline-block px-2.5 py-1 text-xs font-semibold bg-[#84a98c] text-white rounded-lg hover:bg-[#52796f]"
+        >
+          Edit Profile/Scores
+        </Link>
       </td>
     </tr>
   );

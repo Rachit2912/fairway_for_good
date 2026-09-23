@@ -13,6 +13,10 @@ This document accurately classifies implemented features, PRD scope compliance, 
 | **Independent Stripe Donations** | **Implemented** | `createDonationCheckoutSessionAction` in `src/app/actions/billingActions.ts` creates one-time Stripe checkout sessions. Webhook handler records succeeded donations in `donations` table without granting draw eligibility. |
 | **Short-Lived Admin Signed Proof URLs** | **Implemented** | Server action `getWinnerProofSignedUrlAction(storagePath)` in `src/app/actions/adminActions.ts` verifies admin role and generates a 60-second short-lived signed URL for `winner-proofs` bucket images prior to approval. Connected in `AdminWinnersClient`. |
 | **Seed Script Password Enforcement** | **Implemented** | `src/scripts/seed.ts` removed fallback default passwords. Aborts execution with a clear error if `TEST_ADMIN_PASSWORD` or `TEST_USER_PASSWORD` are missing. |
+| **Controlled Admin Role RPC & Audit Logging** | **Implemented** | Migration `20260111000000_admin_role_rpc_and_audit.sql` creates security-definer function `update_user_role`. Enforces admin privileges, validates input role, prevents revoking sole admin, upserts `user_roles`, and writes `audit_logs`. |
+| **Draft & Locked Draw Simulation Logic** | **Implemented** | `adminSimulateDrawAction` groups scores by `round_date DESC`, enforcing active subscription and funded coverage rules for draft draws, and preserving frozen entries for locked draws. |
+| **Voluntary Donation Checkout Modal & Disclosures** | **Implemented** | `DonationModal` accepts positive integer minor-unit amounts in INR, displays clear webhook settlement disclosures and draw eligibility disclaimers, and redirects via `createDonationCheckoutSessionAction`. |
+| **Admin User & Charity Management UI Workflows** | **Implemented** | Admin suite features `/admin/users/[id]` for profile/score editing and `AdminCharitiesClient` for non-profit and event creation, editing, and status toggles. |
 
 ---
 
@@ -24,6 +28,6 @@ This document accurately classifies implemented features, PRD scope compliance, 
 ---
 
 ## Verification Evidence
-- **Vitest Unit & Integration Suite**: 25/25 PASSED (`npm test`)
+- **Vitest Unit & Integration Suite**: 32/32 PASSED (`npm test`)
 - **ESLint**: 0 errors (`npm run lint`)
 - **Next.js Production Build**: PASSED (`npm run build`)

@@ -53,29 +53,71 @@ export async function adminSimulateDrawAction(drawId: string) {
 
   let entriesToSimulate: { user_id: string; score_values: number[] }[] = [];
 
-  const { data: existingEntries } = await supabase
-    .from('draw_entries')
-    .select('user_id, score_values')
-    .eq('draw_id', drawId);
+  if (draw.status !== 'draft') {
+    // For locked/generated/published draws, use frozen entries snapshot (even if empty)
+    const { data: existingEntries, error: entriesErr } = await supabase
+      .from('draw_entries')
+      .select('user_id, score_values')
+      .eq('draw_id', drawId);
 
-  if (existingEntries && existingEntries.length > 0) {
-    entriesToSimulate = existingEntries;
+    if (entriesErr) {
+      return { error: `Failed to fetch draw entries: ${entriesErr.message}` };
+    }
+    entriesToSimulate = existingEntries || [];
   } else {
-    // If draw is in draft status, derive simulated entries from active subscribers
-    const { data: activeSubs } = await supabase
+    // For draft draws, calculate current eligible users based on active subscription and funded coverage allocation
+    const nowIso = new Date().toISOString();
+    const { data: activeSubs, error: subErr } = await supabase
       .from('subscriptions')
       .select('user_id')
-      .in('status', ['active', 'trialing']);
+      .in('status', ['active', 'trialing'])
+      .gte('current_period_end', nowIso);
 
-    if (activeSubs && activeSubs.length > 0) {
-      const userIds = activeSubs.map((s) => s.user_id);
-      const { data: activeScores } = await supabase
+    if (subErr) {
+      return { error: `Failed to fetch active subscriptions: ${subErr.message}` };
+    }
+
+    const { data: allocations, error: allocErr } = await supabase
+      .from('funding_allocations')
+      .select('user_id')
+      .eq('coverage_year', draw.year)
+      .eq('coverage_month', draw.month);
+
+    if (allocErr) {
+      return { error: `Failed to fetch funding allocations: ${allocErr.message}` };
+    }
+
+    const activeUserSet = new Set((activeSubs || []).map((s) => s.user_id));
+    const fundedUserSet = new Set((allocations || []).map((a) => a.user_id));
+
+    const eligibleUserIds = Array.from(activeUserSet).filter((uid) => fundedUserSet.has(uid));
+
+    if (eligibleUserIds.length > 0) {
+      const { data: scoresData, error: scoresErr } = await supabase
         .from('scores')
-        .select('user_id, score_values')
-        .in('user_id', userIds);
+        .select('user_id, round_date, value')
+        .in('user_id', eligibleUserIds)
+        .order('round_date', { ascending: false });
 
-      if (activeScores) {
-        entriesToSimulate = activeScores;
+      if (scoresErr) {
+        return { error: `Failed to fetch user scores: ${scoresErr.message}` };
+      }
+
+      const userScoresMap = new Map<string, number[]>();
+      if (scoresData) {
+        for (const row of scoresData) {
+          const currentList = userScoresMap.get(row.user_id) || [];
+          if (currentList.length < 5) {
+            currentList.push(row.value);
+            userScoresMap.set(row.user_id, currentList);
+          }
+        }
+      }
+
+      for (const [uid, scoreVals] of userScoresMap.entries()) {
+        if (scoreVals.length === 5) {
+          entriesToSimulate.push({ user_id: uid, score_values: scoreVals });
+        }
       }
     }
   }
@@ -553,6 +595,26 @@ export async function adminUpdateCharityStatusAction(charityId: string, active: 
 
 export async function adminUpdateUserRoleAction(targetUserId: string, newRole: 'member' | 'admin') {
   const supabase = await createClient();
+
+  const { error } = await supabase.rpc('update_user_role', {
+    p_target_user_id: targetUserId,
+    p_new_role: newRole,
+  });
+
+  if (error) {
+    return { error: error.message };
+  }
+
+  revalidatePath('/admin/users');
+  return { success: true };
+}
+
+export async function adminUpdateUserProfileAndScoresAction(
+  targetUserId: string,
+  fullName: string,
+  charityPercentage: number
+) {
+  const supabase = await createClient();
   const {
     data: { user },
   } = await supabase.auth.getUser();
@@ -571,20 +633,107 @@ export async function adminUpdateUserRoleAction(targetUserId: string, newRole: '
     return { error: 'Admin privileges required' };
   }
 
-  const { error } = await supabase.from('user_roles').upsert(
-    {
-      user_id: targetUserId,
-      role: newRole,
-      assigned_at: new Date().toISOString(),
-    },
-    { onConflict: 'user_id' }
-  );
+  if (charityPercentage < 10 || charityPercentage > 80) {
+    return { error: 'Charity percentage must be between 10% and 80%' };
+  }
+
+  const { error } = await supabase
+    .from('profiles')
+    .update({
+      full_name: fullName,
+      charity_percentage: charityPercentage,
+      updated_at: new Date().toISOString(),
+    })
+    .eq('id', targetUserId);
 
   if (error) {
     return { error: error.message };
   }
 
+  revalidatePath(`/admin/users/${targetUserId}`);
   revalidatePath('/admin/users');
+  return { success: true };
+}
+
+export async function adminSaveUserScoreAction(targetUserId: string, roundDate: string, value: number) {
+  const supabase = await createClient();
+  const {
+    data: { user },
+  } = await supabase.auth.getUser();
+
+  if (!user) {
+    return { error: 'Authentication required' };
+  }
+
+  const { data: roleData } = await supabase
+    .from('user_roles')
+    .select('role')
+    .eq('user_id', user.id)
+    .maybeSingle();
+
+  if (!roleData || roleData.role !== 'admin') {
+    return { error: 'Admin privileges required' };
+  }
+
+  if (value < 1 || value > 45) {
+    return { error: 'Score value must be between 1 and 45' };
+  }
+
+  const adminSupabase = createAdminClient();
+  const { data: existingScore } = await adminSupabase
+    .from('scores')
+    .select('id')
+    .eq('user_id', targetUserId)
+    .eq('round_date', roundDate)
+    .maybeSingle();
+
+  if (existingScore) {
+    const { error: updateErr } = await adminSupabase
+      .from('scores')
+      .update({ value, updated_at: new Date().toISOString() })
+      .eq('id', existingScore.id);
+
+    if (updateErr) return { error: updateErr.message };
+  } else {
+    const { error: insertErr } = await adminSupabase
+      .from('scores')
+      .insert({ user_id: targetUserId, round_date: roundDate, value });
+
+    if (insertErr) return { error: insertErr.message };
+  }
+
+  revalidatePath(`/admin/users/${targetUserId}`);
+  return { success: true };
+}
+
+export async function adminDeleteUserScoreAction(scoreId: string, targetUserId: string) {
+  const supabase = await createClient();
+  const {
+    data: { user },
+  } = await supabase.auth.getUser();
+
+  if (!user) {
+    return { error: 'Authentication required' };
+  }
+
+  const { data: roleData } = await supabase
+    .from('user_roles')
+    .select('role')
+    .eq('user_id', user.id)
+    .maybeSingle();
+
+  if (!roleData || roleData.role !== 'admin') {
+    return { error: 'Admin privileges required' };
+  }
+
+  const adminSupabase = createAdminClient();
+  const { error } = await adminSupabase.from('scores').delete().eq('id', scoreId);
+
+  if (error) {
+    return { error: error.message };
+  }
+
+  revalidatePath(`/admin/users/${targetUserId}`);
   return { success: true };
 }
 

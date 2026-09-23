@@ -8,7 +8,7 @@ export interface WinnerWorkflowState {
   payoutStatus: PayoutStatus;
 }
 
-export function approveWinnerProof(state: WinnerWorkflowState, adminId: string): WinnerWorkflowState {
+export function approveWinnerProof(state: WinnerWorkflowState, _adminId: string): WinnerWorkflowState {
   if (!state.storagePath) {
     throw new Error('Cannot approve winner award without uploaded scorecard proof');
   }
@@ -21,7 +21,7 @@ export function approveWinnerProof(state: WinnerWorkflowState, adminId: string):
   };
 }
 
-export function processPayout(state: WinnerWorkflowState, adminId: string): WinnerWorkflowState {
+export function processPayout(state: WinnerWorkflowState, _adminId: string): WinnerWorkflowState {
   if (state.reviewStatus !== 'approved') {
     throw new Error('Cannot mark payout as paid before proof approval');
   }

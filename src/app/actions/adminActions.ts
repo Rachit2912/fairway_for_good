@@ -637,73 +637,45 @@ export async function adminUpdateUserProfileAndScoresAction(
     return { error: 'Charity percentage must be between 10% and 80%' };
   }
 
-  const { error } = await supabase
+  const adminSupabase = createAdminClient();
+  const { data: updatedProfiles, error } = await adminSupabase
     .from('profiles')
     .update({
       full_name: fullName,
       charity_percentage: charityPercentage,
       updated_at: new Date().toISOString(),
     })
-    .eq('id', targetUserId);
+    .eq('id', targetUserId)
+    .select();
+
+  if (error) {
+    return { error: error.message };
+  }
+
+  if (!updatedProfiles || updatedProfiles.length === 0) {
+    return { error: 'Target profile not found or zero rows updated' };
+  }
+
+  revalidatePath(`/admin/users/${targetUserId}`);
+  revalidatePath('/admin/users');
+  return { success: true, data: updatedProfiles[0] };
+}
+
+export async function adminSaveUserScoreAction(targetUserId: string, roundDate: string, value: number) {
+  const supabase = await createClient();
+
+  const { data, error } = await supabase.rpc('admin_save_user_score', {
+    p_target_user_id: targetUserId,
+    p_round_date: roundDate,
+    p_value: value,
+  });
 
   if (error) {
     return { error: error.message };
   }
 
   revalidatePath(`/admin/users/${targetUserId}`);
-  revalidatePath('/admin/users');
-  return { success: true };
-}
-
-export async function adminSaveUserScoreAction(targetUserId: string, roundDate: string, value: number) {
-  const supabase = await createClient();
-  const {
-    data: { user },
-  } = await supabase.auth.getUser();
-
-  if (!user) {
-    return { error: 'Authentication required' };
-  }
-
-  const { data: roleData } = await supabase
-    .from('user_roles')
-    .select('role')
-    .eq('user_id', user.id)
-    .maybeSingle();
-
-  if (!roleData || roleData.role !== 'admin') {
-    return { error: 'Admin privileges required' };
-  }
-
-  if (value < 1 || value > 45) {
-    return { error: 'Score value must be between 1 and 45' };
-  }
-
-  const adminSupabase = createAdminClient();
-  const { data: existingScore } = await adminSupabase
-    .from('scores')
-    .select('id')
-    .eq('user_id', targetUserId)
-    .eq('round_date', roundDate)
-    .maybeSingle();
-
-  if (existingScore) {
-    const { error: updateErr } = await adminSupabase
-      .from('scores')
-      .update({ value, updated_at: new Date().toISOString() })
-      .eq('id', existingScore.id);
-
-    if (updateErr) return { error: updateErr.message };
-  } else {
-    const { error: insertErr } = await adminSupabase
-      .from('scores')
-      .insert({ user_id: targetUserId, round_date: roundDate, value });
-
-    if (insertErr) return { error: insertErr.message };
-  }
-
-  revalidatePath(`/admin/users/${targetUserId}`);
-  return { success: true };
+  return { success: true, data };
 }
 
 export async function adminDeleteUserScoreAction(scoreId: string, targetUserId: string) {
